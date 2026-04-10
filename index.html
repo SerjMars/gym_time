@@ -1,0 +1,1089 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Gym Tracker">
+  <meta name="theme-color" content="#f8f8f6">
+  <title>Gym Tracker</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #f5f5f2;
+      --surface:  #ffffff;
+      --border:   #e4e4df;
+      --text:     #1a1a1a;
+      --text2:    #6b6b6b;
+      --text3:    #aaaaaa;
+      --danger:   #c62828;
+      --warning:  #e65100;
+      --radius:   12px;
+      --rsm:      8px;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100dvh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    #app {
+      max-width: 480px;
+      margin: 0 auto;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Botones ─────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      padding: 12px 18px; border-radius: var(--rsm);
+      border: 1px solid var(--border); background: var(--surface);
+      color: var(--text); font-size: 15px; font-weight: 500;
+      cursor: pointer; min-height: 48px;
+      -webkit-tap-highlight-color: transparent;
+      transition: background .15s;
+    }
+    .btn:active { background: #ebebeb; }
+    .btn-primary { background: var(--text); color: #fff; border-color: var(--text); }
+    .btn-primary:active { background: #333; }
+    .btn-danger { color: var(--danger); border-color: #ffd0d0; background: #fff5f5; }
+    .btn-danger:active { background: #ffe0e0; }
+    .btn-block { width: 100%; }
+    .btn-sm { padding: 8px 12px; font-size: 13px; min-height: 36px; }
+
+    /* ── Inputs ──────────────────────────────────── */
+    .input {
+      width: 100%; padding: 13px 14px;
+      border: 1px solid var(--border); border-radius: var(--rsm);
+      font-size: 16px; background: var(--surface); color: var(--text); outline: none;
+    }
+    .input:focus { border-color: var(--text); }
+
+    /* ── Cards ───────────────────────────────────── */
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 16px;
+    }
+
+    /* ── Header ──────────────────────────────────── */
+    .header {
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 12px 16px; display: flex; align-items: center; gap: 10px;
+      position: sticky; top: 0; z-index: 10;
+    }
+    .header-info { flex: 1; }
+    .header-title { font-size: 16px; font-weight: 600; line-height: 1.2; }
+    .header-sub { font-size: 11px; color: var(--text2); margin-top: 1px; }
+
+    /* ── Pill persona ────────────────────────────── */
+    .person-pill {
+      display: flex; align-items: center; gap: 6px;
+      padding: 7px 12px; border-radius: 99px;
+      border: 1px solid var(--border); background: var(--bg);
+      font-size: 13px; font-weight: 500; cursor: pointer;
+      -webkit-tap-highlight-color: transparent; white-space: nowrap;
+    }
+    .person-pill:active { background: var(--border); }
+
+    /* ── Tabs ────────────────────────────────────── */
+    .tabs {
+      display: flex; background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    .tab-btn {
+      flex: 1; padding: 12px 6px; border: none; background: none;
+      font-size: 14px; color: var(--text2); cursor: pointer;
+      border-bottom: 2px solid transparent; transition: all .15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .tab-btn.active { color: var(--text); border-bottom-color: var(--text); font-weight: 500; }
+
+    /* ── Calendario ──────────────────────────────── */
+    .cal-nav {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 16px 8px;
+    }
+    .cal-grid {
+      display: grid; grid-template-columns: repeat(7,1fr);
+      gap: 2px; padding: 0 8px 8px;
+    }
+    .cal-lbl { text-align: center; font-size: 11px; color: var(--text3); padding: 5px 0; }
+    .cal-day {
+      display: flex; flex-direction: column; align-items: center;
+      padding: 5px 2px 4px; border-radius: 8px; cursor: pointer;
+      -webkit-tap-highlight-color: transparent; min-height: 50px;
+    }
+    .cal-day:active { background: var(--border); }
+    .cal-num {
+      font-size: 13px; line-height: 1; margin-bottom: 4px;
+      width: 26px; height: 26px; display: flex;
+      align-items: center; justify-content: center; border-radius: 50%;
+    }
+    .cal-day.today .cal-num { background: var(--text); color: #fff; font-weight: 600; }
+    .cal-day.past .cal-num { color: var(--text3); }
+    .cal-dots { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; max-width: 28px; }
+    .cal-dot { width: 6px; height: 6px; border-radius: 50%; }
+
+    /* ── Bottom sheet ────────────────────────────── */
+    .backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,.38); z-index: 50;
+      animation: fadeIn .2s ease;
+    }
+    .sheet {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      max-width: 480px; margin: 0 auto;
+      background: var(--surface); border-radius: 20px 20px 0 0;
+      max-height: 82dvh; overflow-y: auto; z-index: 51;
+      padding-bottom: env(safe-area-inset-bottom, 16px);
+      animation: slideUp .25s ease;
+    }
+    .sheet-handle {
+      width: 36px; height: 4px; background: var(--border);
+      border-radius: 2px; margin: 10px auto 0;
+    }
+    .sheet-hdr {
+      padding: 12px 16px 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+
+    /* ── Filas en el sheet ───────────────────────── */
+    .prow {
+      display: flex; align-items: center; gap: 10px;
+      padding: 13px 16px; border-bottom: 1px solid var(--border);
+      min-height: 54px;
+    }
+    .prow.clickable { cursor: pointer; }
+    .prow.clickable:active { background: var(--bg); }
+    .pdot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+    .pname { flex: 1; font-size: 15px; }
+    .ptime { font-size: 15px; font-weight: 500; }
+
+    /* ── Input de hora inline ────────────────────── */
+    .time-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 16px; background: var(--bg);
+      border-bottom: 1px solid var(--border);
+    }
+    .time-row input[type=time] {
+      flex: 1; padding: 10px 12px; border: 1px solid var(--border);
+      border-radius: var(--rsm); font-size: 16px;
+      background: var(--surface); color: var(--text); outline: none;
+    }
+    .time-row input[type=time]:focus { border-color: var(--text); }
+
+    /* ── Resumen ─────────────────────────────────── */
+    .stat-grid {
+      display: grid; grid-template-columns: repeat(3,1fr); gap: 8px;
+    }
+    .stat-card {
+      background: var(--bg); border-radius: var(--rsm); padding: 10px; text-align: center;
+    }
+    .stat-val { font-size: 22px; font-weight: 600; }
+    .stat-lbl { font-size: 11px; color: var(--text3); margin-top: 2px; }
+
+    .progress {
+      height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden;
+    }
+    .progress-inner { height: 100%; display: flex; }
+
+    /* ── Loading ─────────────────────────────────── */
+    .loading {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 14px; padding: 24px;
+    }
+    .spinner {
+      width: 32px; height: 32px;
+      border: 2px solid var(--border); border-top-color: var(--text);
+      border-radius: 50%; animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Admin bar ───────────────────────────────── */
+    .admin-bar {
+      background: #fff8e1; border-bottom: 1px solid #ffe082;
+      padding: 8px 16px; font-size: 13px; color: #bf360c;
+      display: flex; align-items: center; gap: 8px;
+    }
+
+    /* ── Utilerías ───────────────────────────────── */
+    .content { flex: 1; overflow-y: auto; }
+    .gap { display: flex; flex-direction: column; gap: 10px; }
+    .row { display: flex; align-items: center; gap: 8px; }
+    .px { padding-left: 16px; padding-right: 16px; }
+    .pt { padding-top: 14px; }
+    .pb { padding-bottom: 16px; }
+    .text-sm { font-size: 13px; }
+    .text-xs { font-size: 11px; }
+    .text-muted { color: var(--text2); }
+    .text-danger { color: var(--danger); }
+    .text-warning { color: var(--warning); }
+  </style>
+</head>
+<body>
+<div id="app"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+// ╔══════════════════════════════════════════════════════╗
+// ║  CONFIGURACIÓN  —  edita estas tres líneas           ║
+// ╚══════════════════════════════════════════════════════╝
+const SUPABASE_URL  = 'https://orpfbjpiwhmdjvtayefu.supabase.co';          // ej. https://xyzxyz.supabase.co
+const SUPABASE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ycGZianBpd2htZGp2dGF5ZWZ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU3ODY1OTcsImV4cCI6MjA5MTM2MjU5N30.yUqrGLQUsxZ9MIC4ob39uvE4FEjYJLOhf9Kymf5zV0I';             // clave "anon public" de Supabase
+const ADMIN_PASS    = 'adminMars1220';        // contraseña para el administrador
+
+// ── Colores por persona (hasta 10) ─────────────────────
+const PC = [
+  '#7F77DD','#1D9E75','#D85A30','#D4537E','#378ADD',
+  '#639922','#BA7517','#E24B4A','#888780','#0F6E56'
+];
+
+// ── Meses y días ───────────────────────────────────────
+const MES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
+             'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+const DIA = ['L','M','X','J','V','S','D'];
+
+// ── Utilidades de fecha ────────────────────────────────
+const pad  = n => String(n).padStart(2, '0');
+const hoy  = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; };
+const dStr = (y,m,d) => `${y}-${pad(m+1)}-${pad(d)}`;
+const dIM  = (y,m) => new Date(y, m+1, 0).getDate();
+const fwd  = (y,m) => { const d = new Date(y,m,1).getDay(); return (d+6)%7; };
+
+// ── Estado global ──────────────────────────────────────
+const now = new Date();
+let S = {
+  config:   null,    // {id, total_sessions, period_months, start_date, people:[{id,name}]}
+  sessions: [],      // [{id, person_id, date, time}]
+  personId: null,    // número — persona actual (guardada en localStorage)
+  isAdmin:  false,
+  tab:      'calendar',
+  cy: now.getFullYear(),
+  cm: now.getMonth(),
+  sheet:    null,    // {date:'YYYY-MM-DD'} cuando el bottom sheet está abierto
+  pending:  null,    // {personId, date} | {sessionId} según la acción
+  donating: null,    // personId que está eligiendo a quién donar
+  loading:  true,
+  error:    null,
+};
+
+// ── Cliente Supabase (se inicializa en loadAll) ────────
+let sb = null;
+
+// ── Derived helpers ────────────────────────────────────
+const spp = () => S.config
+  ? Math.floor(S.config.total_sessions / Math.max(S.config.people.length, 1))
+  : 0;
+
+const effQuota = pid => {
+  const base = spp();
+  const d = S.config?.donations || [];
+  return base - d.filter(x => x.from === pid).length + d.filter(x => x.to === pid).length;
+};
+
+const statsP = () => {
+  const t = hoy(), r = {};
+  (S.config?.people || []).forEach(p => { r[p.id] = { u: 0, s: 0 }; });
+  S.sessions.forEach(({ person_id: pid, date: d }) => {
+    if (r[pid]) d <= t ? r[pid].u++ : r[pid].s++;
+  });
+  return r;
+};
+
+const byDate = () => {
+  const m = {};
+  S.sessions.forEach(s => { (m[s.date] ??= []).push(s); });
+  return m;
+};
+
+const colorOf = pid => {
+  const idx = (S.config?.people || []).findIndex(p => p.id === pid);
+  return PC[Math.max(0, idx) % 10];
+};
+
+
+// ══════════════════════════════════════════════════════
+//  SUPABASE — operaciones
+// ══════════════════════════════════════════════════════
+
+async function loadAll() {
+  S.loading = true; render();
+
+  if (SUPABASE_URL === 'TU_PROJECT_URL') {
+    S.error = 'Configura SUPABASE_URL y SUPABASE_KEY en el archivo HTML antes de usar la app.';
+    S.loading = false; render(); return;
+  }
+
+  if (!window.supabase) {
+    S.error = 'No se pudo cargar la librería de Supabase. Verifica tu conexión a internet.';
+    S.loading = false; render(); return;
+  }
+
+  try {
+    if (!sb) sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  } catch (e) {
+    S.error = 'Error al inicializar Supabase: ' + e.message;
+    S.loading = false; render(); return;
+  }
+
+  const { data: cfg, error: e1 } = await sb.from('gym_config').select('*').maybeSingle();
+  if (e1) { S.error = e1.message; S.loading = false; render(); return; }
+
+  S.config = cfg;
+
+  if (cfg) {
+    const { data: sess, error: e2 } = await sb.from('gym_sessions').select('*');
+    if (e2) { S.error = e2.message; S.loading = false; render(); return; }
+    S.sessions = sess || [];
+
+    const saved = localStorage.getItem('gym_pid');
+    if (saved && cfg.people.find(p => p.id === +saved)) {
+      S.personId = +saved;
+    }
+  }
+
+  S.loading = false; render();
+}
+
+async function saveConfig(cfg) {
+  const { error } = await sb.from('gym_config').upsert({ id: 1, ...cfg });
+  if (error) { alert('Error guardando config: ' + error.message); return false; }
+  S.config = { id: 1, ...cfg };
+  render(); return true;
+}
+
+async function addSession(personId, date, time) {
+  const { data, error } = await sb.from('gym_sessions')
+    .insert({ person_id: personId, date, time }).select().single();
+  if (error) { alert('Error al guardar sesión: ' + error.message); return; }
+  S.sessions = [...S.sessions, data];
+  S.pending = null; render();
+}
+
+async function removeSession(id) {
+  const { error } = await sb.from('gym_sessions').delete().eq('id', id);
+  if (error) { alert('Error al eliminar: ' + error.message); return; }
+  S.sessions = S.sessions.filter(s => s.id !== id);
+  S.pending = null; render();
+}
+
+async function updateSessionTime(id, time) {
+  const { error } = await sb.from('gym_sessions').update({ time }).eq('id', id);
+  if (error) { alert('Error al actualizar hora: ' + error.message); return; }
+  S.sessions = S.sessions.map(s => s.id === id ? { ...s, time } : s);
+  S.pending = null; render();
+}
+
+// ── Tiempo real ────────────────────────────────────────
+async function donateSess(fromId, toId) {
+  const donations = [...(S.config.donations||[]), { id: Date.now(), from: fromId, to: toId }];
+  const ok = await saveConfig({ ...S.config, donations });
+  if (ok) { S.donating = null; render(); }
+}
+
+async function revokeDonation(donId) {
+  const donations = (S.config.donations||[]).filter(d => d.id !== donId);
+  await saveConfig({ ...S.config, donations });
+}
+
+function subscribeRealtime() {
+  sb.channel('gym-rt')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'gym_sessions' }, p => {
+      if (!S.sessions.find(s => s.id === p.new.id)) {
+        S.sessions = [...S.sessions, p.new]; render();
+      }
+    })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'gym_sessions' }, p => {
+      S.sessions = S.sessions.filter(s => s.id !== p.old.id); render();
+    })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'gym_sessions' }, p => {
+      S.sessions = S.sessions.map(s => s.id === p.new.id ? p.new : s); render();
+    })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'gym_config' }, p => {
+      S.config = p.new; render();
+    })
+    .subscribe();
+}
+
+
+// ══════════════════════════════════════════════════════
+//  RENDER
+// ══════════════════════════════════════════════════════
+
+function render() {
+  const app = document.getElementById('app');
+
+  if (S.loading) {
+    app.innerHTML = `<div class="loading"><div class="spinner"></div><p class="text-muted text-sm">Cargando...</p></div>`;
+    return;
+  }
+  if (S.error) {
+    app.innerHTML = `<div class="loading"><p class="text-danger" style="text-align:center">${S.error}</p><button class="btn" onclick="loadAll()">Reintentar</button></div>`;
+    return;
+  }
+  if (!S.config) {
+    app.innerHTML = tplFirstSetup(); bindSetup(); return;
+  }
+  if (!S.personId) {
+    app.innerHTML = tplPersonSelect(); bindPersonSelect(); return;
+  }
+
+  app.innerHTML = tplApp(); bindApp();
+}
+
+// ── Primera vez ────────────────────────────────────────
+function tplFirstSetup() {
+  return `
+<div style="padding:24px 16px 32px;max-width:480px;margin:0 auto">
+  <p style="font-size:22px;font-weight:600;margin-bottom:4px">Configurar grupo</p>
+  <p class="text-muted text-sm" style="margin-bottom:20px">Primera vez — un administrador completa esto</p>
+  <div class="gap">
+    <div class="card gap">
+      <p style="font-size:13px;font-weight:500;color:var(--text2)">Paquete</p>
+      <label class="gap" style="gap:4px">
+        <span class="text-xs text-muted">Sesiones totales</span>
+        <input id="fs-total" class="input" type="number" value="180" min="1">
+      </label>
+      <label class="gap" style="gap:4px">
+        <span class="text-xs text-muted">Período (meses)</span>
+        <input id="fs-months" class="input" type="number" value="12" min="1" max="120">
+      </label>
+      <label class="gap" style="gap:4px">
+        <span class="text-xs text-muted">Fecha de inicio</span>
+        <input id="fs-start" class="input" type="date" value="${hoy()}">
+      </label>
+    </div>
+    <div class="card gap">
+      <p style="font-size:13px;font-weight:500;color:var(--text2)">Participantes</p>
+      <div id="fs-list" class="gap">
+        <div class="row"><div style="width:12px;height:12px;border-radius:50%;background:${PC[0]};flex-shrink:0"></div><input class="input fs-p" type="text" placeholder="Participante 1" style="flex:1"></div>
+        <div class="row"><div style="width:12px;height:12px;border-radius:50%;background:${PC[1]};flex-shrink:0"></div><input class="input fs-p" type="text" placeholder="Participante 2" style="flex:1"></div>
+      </div>
+      <button id="fs-add" class="btn btn-block" style="border-style:dashed">+ Agregar participante</button>
+    </div>
+    <button id="fs-launch" class="btn btn-primary btn-block" style="font-size:16px;padding:14px">Crear grupo</button>
+  </div>
+</div>`;
+}
+
+// ── Selección de persona ───────────────────────────────
+function tplPersonSelect() {
+  return `
+<div style="padding:32px 16px;max-width:480px;margin:0 auto">
+  <p style="font-size:22px;font-weight:600;margin-bottom:6px">¿Quién eres?</p>
+  <p class="text-muted text-sm" style="margin-bottom:24px">Elige tu nombre para continuar</p>
+  <div class="gap">
+    ${S.config.people.map((p, i) => `
+      <button class="btn btn-block person-pick" data-pid="${p.id}"
+        style="justify-content:flex-start;gap:14px;padding:18px 16px;font-size:16px">
+        <div style="width:14px;height:14px;border-radius:50%;background:${PC[i%10]};flex-shrink:0"></div>
+        ${p.name}
+      </button>
+    `).join('')}
+  </div>
+  <div style="margin-top:32px;text-align:center">
+    <button id="btn-admin-login" style="background:none;border:none;color:var(--text3);font-size:13px;cursor:pointer;padding:8px">
+      Acceso de administrador
+    </button>
+  </div>
+</div>`;
+}
+
+// ── App principal ──────────────────────────────────────
+function tplApp() {
+  const p = S.config.people.find(p => p.id === S.personId);
+  const pi = S.config.people.findIndex(p => p.id === S.personId);
+  const pc = PC[pi % 10];
+
+  return `
+${S.isAdmin ? `<div class="admin-bar">⚙ Modo administrador · <a href="#" id="exit-admin" style="color:inherit;text-decoration:underline">salir</a></div>` : ''}
+<div class="header">
+  <div class="header-info">
+    <div class="header-title">Gym Tracker</div>
+    <div class="header-sub">${S.config.total_sessions} sesiones · ${S.config.people.length} personas · ${spp()} c/u</div>
+  </div>
+  <button class="person-pill" id="btn-change-person">
+    <div style="width:9px;height:9px;border-radius:50%;background:${pc}"></div>
+    ${p?.name || '?'}
+  </button>
+</div>
+<div class="tabs">
+  <button class="tab-btn ${S.tab==='calendar'?'active':''}" data-tab="calendar">Calendario</button>
+  <button class="tab-btn ${S.tab==='summary'?'active':''}" data-tab="summary">Resumen</button>
+  ${S.isAdmin ? `<button class="tab-btn ${S.tab==='admin'?'active':''}" data-tab="admin">Admin</button>` : ''}
+</div>
+<div class="content">
+  ${S.tab==='calendar' ? tplCalendar() : S.tab==='summary' ? tplSummary() : tplAdmin()}
+</div>
+${S.sheet ? tplSheet() : ''}`;
+}
+
+// ── Calendario ─────────────────────────────────────────
+function tplCalendar() {
+  const y = S.cy, m = S.cm, t = hoy();
+  const nD = dIM(y,m), fw2 = fwd(y,m);
+  const cells = Array(fw2).fill(null);
+  for (let d=1; d<=nD; d++) cells.push(d);
+  const bd = byDate();
+
+  return `
+<div class="cal-nav">
+  <button class="btn btn-sm" id="prev-m">&#8249;</button>
+  <p style="font-size:16px;font-weight:600">${MES[m]} ${y}</p>
+  <button class="btn btn-sm" id="next-m">&#8250;</button>
+</div>
+<div class="cal-grid">
+  ${DIA.map(d => `<div class="cal-lbl">${d}</div>`).join('')}
+  ${cells.map(day => {
+    if (!day) return `<div></div>`;
+    const ds = dStr(y,m,day), dp = bd[ds] || [];
+    const isT = ds===t, isP = ds<t;
+    return `
+    <div class="cal-day ${isT?'today':''} ${isP?'past':''}" data-date="${ds}">
+      <div class="cal-num">${day}</div>
+      <div class="cal-dots">
+        ${dp.map(s => {
+          const c = colorOf(s.person_id);
+          const nm = S.config.people.find(p=>p.id===s.person_id)?.name||'';
+          return `<div class="cal-dot" style="background:${c};opacity:${isP?.5:1}" title="${nm} · ${s.time}"></div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }).join('')}
+</div>
+<div style="padding:4px 16px 16px;display:flex;flex-wrap:wrap;gap:6px">
+  ${S.config.people.map((p,i) => {
+    const st = statsP()[p.id]||{u:0,s:0};
+    return `<div style="display:flex;align-items:center;gap:5px;background:var(--surface);border:1px solid var(--border);border-radius:99px;padding:4px 10px;font-size:12px">
+      <div style="width:8px;height:8px;border-radius:50%;background:${PC[i%10]}"></div>
+      ${p.name} · ${st.u+st.s}/${spp()}
+    </div>`;
+  }).join('')}
+</div>`;
+}
+
+// ── Bottom sheet (detalle del día) ─────────────────────
+function tplSheet() {
+  const ds = S.sheet.date;
+  const [y, m, d] = ds.split('-').map(Number);
+  const t = hoy(), isP = ds<t, isT = ds===t;
+  const daySess = (byDate()[ds] || []);
+  const stMap = statsP(), sp2 = spp();
+
+  return `
+<div class="backdrop" id="backdrop"></div>
+<div class="sheet">
+  <div class="sheet-handle"></div>
+  <div class="sheet-hdr">
+    <div>
+      <p style="font-size:16px;font-weight:600">${d} de ${MES[m-1]}</p>
+      <p class="text-xs text-muted" style="margin-top:2px">${isP?'Sesión pasada':isT?'Hoy':'Sesión futura'}</p>
+    </div>
+  </div>
+
+  ${S.config.people.map((p, i) => {
+    const personSess = daySess.filter(s => s.person_id === p.id)
+      .sort((a,b) => a.time.localeCompare(b.time));
+    const c = PC[i%10];
+    const canEdit = p.id === S.personId || S.isAdmin;
+    const st = stMap[p.id] || {u:0, s:0};
+    const eq = effQuota(p.id);
+    const full = st.u+st.s >= eq;
+    const addMode = S.pending?.personId === p.id && S.pending?.date === ds;
+
+    return `
+    <div style="border-bottom:1px solid var(--border)">
+      <div class="prow" style="cursor:default;padding-bottom:6px">
+        <div class="pdot" style="background:${c}"></div>
+        <span class="pname" style="font-weight:500">${p.name}</span>
+        <span class="text-xs text-muted">${st.u+st.s}/${eq}</span>
+      </div>
+
+      ${personSess.map(sess => {
+        if (S.pending?.sessionId === sess.id) {
+          return `
+          <div class="time-row" style="padding-left:32px;flex-wrap:wrap;gap:8px;margin-bottom:4px">
+            <input id="edit-time" type="time" step="900" value="${sess.time}" style="flex:1;min-width:120px">
+            <button class="btn btn-primary btn-sm" id="confirm-edit" data-sid="${sess.id}">✓ Guardar</button>
+            <button class="btn btn-sm" id="cancel-edit">Cancelar</button>
+          </div>`;
+        }
+        return `
+        <div class="prow" style="padding-top:4px;padding-bottom:4px;padding-left:32px;cursor:default">
+          <span class="ptime" style="flex:1">${sess.time}</span>
+          ${canEdit ? `
+            <button class="btn btn-sm" data-edit="${sess.id}">Editar</button>
+            <button class="btn btn-sm btn-danger" data-del="${sess.id}">×</button>
+          ` : ''}
+        </div>`;
+      }).join('')}
+
+      ${addMode ? `
+      <div class="time-row" style="padding-left:32px;flex-wrap:wrap;gap:8px;padding-bottom:10px">
+        <input id="add-time" type="time" step="900" style="flex:1;min-width:120px">
+        <button class="btn btn-primary btn-sm" id="confirm-add" data-pid="${p.id}" data-date="${ds}">✓ Añadir</button>
+        <button class="btn btn-sm" id="cancel-add">Cancelar</button>
+      </div>`
+      : canEdit && !full ? `
+      <div class="prow p-add-row clickable" data-pid="${p.id}" data-date="${ds}"
+        style="padding-top:4px;padding-bottom:10px;padding-left:32px;cursor:pointer">
+        <span class="text-sm" style="color:var(--text3)">+ añadir sesión</span>
+      </div>`
+      : canEdit && full ? `
+      <div style="padding:4px 16px 10px 32px">
+        <span class="text-xs text-muted">sin cuota disponible</span>
+      </div>` : `<div style="height:8px"></div>`}
+    </div>`;
+  }).join('')}
+  <div style="height:16px"></div>
+</div>`;
+}
+
+// ── Resumen ────────────────────────────────────────────
+function tplSummary() {
+  const t = hoy(), st = statsP();
+  const totalUsed = S.sessions.filter(s => s.date <= t).length;
+  const tPct = Math.round(totalUsed / Math.max(S.config.total_sessions,1) * 100);
+  const sorted = [...S.config.people]
+    .sort((a,b) => (st[b.id]?.u+st[b.id]?.s||0) - (st[a.id]?.u+st[a.id]?.s||0));
+  const donations = S.config.donations || [];
+
+  return `
+<div class="px pt pb">
+  <div class="card" style="margin-bottom:10px">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <span class="text-sm" style="font-weight:500">Total del paquete</span>
+      <span class="text-xs text-muted">${totalUsed}/${S.config.total_sessions} (${tPct}%)</span>
+    </div>
+    <div class="progress"><div class="progress-inner"><div style="width:${tPct}%;background:var(--text);height:100%"></div></div></div>
+  </div>
+  <div class="gap">
+    ${sorted.map(p => {
+      const i = Math.max(0, S.config.people.indexOf(p)) % 10;
+      const c = PC[i];
+      const s = st[p.id]||{u:0,s:0};
+      const eq = effQuota(p.id);
+      const rem = eq - s.u - s.s;
+      const upct = Math.round(s.u/Math.max(eq,1)*100);
+      const spct = Math.round(s.s/Math.max(eq,1)*100);
+      const isMe = p.id === S.personId || S.isAdmin;
+      const donating = S.donating === p.id;
+      const given    = donations.filter(d => d.from === p.id).length;
+      const received = donations.filter(d => d.to   === p.id).length;
+      const others   = S.config.people.filter(o => o.id !== p.id);
+
+      return `
+      <div class="card" style="border-left:3px solid ${c}">
+        <div class="row" style="justify-content:space-between;margin-bottom:8px">
+          <div class="row"><div style="width:10px;height:10px;border-radius:50%;background:${c}"></div><span style="font-size:15px;font-weight:500">${p.name}</span></div>
+          <span class="text-sm ${rem<=0?'text-danger':rem<=5?'text-warning':'text-muted'}">${rem<=0?'Completo':rem+' restantes'}</span>
+        </div>
+        <div class="progress" style="margin-bottom:12px">
+          <div class="progress-inner">
+            <div style="width:${upct}%;background:${c};height:100%"></div>
+            <div style="width:${spct}%;background:${c}77;height:100%"></div>
+          </div>
+        </div>
+        <div class="stat-grid" style="margin-bottom:${(given||received||isMe)?'12px':'0'}">
+          <div class="stat-card"><div class="stat-val">${s.u}</div><div class="stat-lbl">Usadas</div></div>
+          <div class="stat-card"><div class="stat-val">${s.s}</div><div class="stat-lbl">Programadas</div></div>
+          <div class="stat-card"><div class="stat-val ${rem<=0?'text-danger':rem<=5?'text-warning':''}">${rem}</div><div class="stat-lbl">Restantes</div></div>
+        </div>
+
+        ${(given||received) ? `
+        <div class="row" style="gap:10px;margin-bottom:${isMe?'10px':'0'}">
+          ${given   ? `<span class="text-xs text-muted">↑ ${given} donada${given>1?'s':''}</span>` : ''}
+          ${received? `<span class="text-xs text-muted">↓ ${received} recibida${received>1?'s':''}</span>` : ''}
+        </div>` : ''}
+
+        ${isMe && !donating && rem > 0 ? `
+        <button class="btn btn-block btn-sm donate-btn" data-pid="${p.id}"
+          style="border-style:dashed;color:var(--text2)">
+          Donar una sesión →
+        </button>` : ''}
+
+        ${donating ? `
+        <div style="border-top:1px solid var(--border);padding-top:10px">
+          <p class="text-xs text-muted" style="margin-bottom:8px">¿A quién le donas la sesión?</p>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            ${others.map((o,oi) => {
+              const oc = PC[S.config.people.findIndex(x=>x.id===o.id)%10];
+              return `<button class="btn btn-sm do-donate" data-from="${p.id}" data-to="${o.id}"
+                style="gap:6px;padding:8px 12px">
+                <div style="width:8px;height:8px;border-radius:50%;background:${oc}"></div>
+                ${o.name}
+              </button>`;
+            }).join('')}
+            <button class="btn btn-sm cancel-donate" style="color:var(--text2)">Cancelar</button>
+          </div>
+        </div>` : ''}
+      </div>`;
+    }).join('')}
+  </div>
+  <div style="height:20px"></div>
+</div>`;
+}
+
+// ── Panel admin ────────────────────────────────────────
+function tplAdmin() {
+  return `
+<div class="px pt pb gap">
+  <div class="card gap">
+    <p style="font-size:13px;font-weight:500;color:var(--text2)">Configuración del paquete</p>
+    <label class="gap" style="gap:4px"><span class="text-xs text-muted">Sesiones totales</span><input id="adm-total" class="input" type="number" value="${S.config.total_sessions}" min="1"></label>
+    <label class="gap" style="gap:4px"><span class="text-xs text-muted">Período (meses)</span><input id="adm-months" class="input" type="number" value="${S.config.period_months}" min="1"></label>
+    <label class="gap" style="gap:4px"><span class="text-xs text-muted">Fecha de inicio</span><input id="adm-start" class="input" type="date" value="${S.config.start_date}"></label>
+    <button id="adm-save-cfg" class="btn btn-primary">Guardar configuración</button>
+  </div>
+
+  <div class="card gap">
+    <p style="font-size:13px;font-weight:500;color:var(--text2)">Participantes</p>
+    <div id="adm-people" class="gap">
+      ${S.config.people.map((p,i) => `
+        <div class="row">
+          <div style="width:12px;height:12px;border-radius:50%;background:${PC[i%10]};flex-shrink:0"></div>
+          <input class="input adm-pname" data-pid="${p.id}" type="text" value="${p.name}" style="flex:1">
+          <button class="btn btn-sm btn-danger adm-rm-p" data-pid="${p.id}">×</button>
+        </div>
+      `).join('')}
+    </div>
+    ${S.config.people.length<10 ? `<button id="adm-add-p" class="btn btn-block" style="border-style:dashed">+ Agregar participante</button>` : ''}
+    <button id="adm-save-people" class="btn btn-primary">Guardar participantes</button>
+  </div>
+
+  <div class="card gap">
+    <p style="font-size:13px;font-weight:500;color:var(--text2)">Exportar datos</p>
+    <div class="row">
+      <button id="adm-csv" class="btn" style="flex:1">Exportar CSV</button>
+      <button id="adm-xlsx" class="btn" style="flex:1">Exportar Excel</button>
+    </div>
+  </div>
+
+  <div class="card gap">
+    <p style="font-size:13px;font-weight:500;color:var(--text2)">Donaciones registradas</p>
+    ${(() => {
+      const d = S.config.donations || [];
+      if (!d.length) return '<p class="text-sm text-muted">Sin donaciones registradas.</p>';
+      return d.map(don => {
+        const from = S.config.people.find(p=>p.id===don.from)?.name||'?';
+        const to   = S.config.people.find(p=>p.id===don.to  )?.name||'?';
+        return `<div class="row" style="justify-content:space-between">
+          <span class="text-sm">${from} → ${to}</span>
+          <button class="btn btn-sm btn-danger revoke-don" data-id="${don.id}">Revocar</button>
+        </div>`;
+      }).join('');
+    })()}
+  </div>
+
+  <div class="card gap" style="border-color:#ffd0d0">
+    <p style="font-size:13px;font-weight:500;color:var(--danger)">Zona peligrosa</p>
+    <button id="adm-reset" class="btn btn-danger btn-block">Eliminar todas las sesiones</button>
+  </div>
+  <div style="height:16px"></div>
+</div>`;
+}
+
+
+// ══════════════════════════════════════════════════════
+//  EVENTOS
+// ══════════════════════════════════════════════════════
+
+function bindSetup() {
+  let count = 2;
+
+  document.getElementById('fs-add')?.addEventListener('click', () => {
+    if (count >= 10) return;
+    const list = document.getElementById('fs-list');
+    const div = document.createElement('div');
+    div.className = 'row';
+    div.innerHTML = `<div style="width:12px;height:12px;border-radius:50%;background:${PC[count]};flex-shrink:0"></div><input class="input fs-p" type="text" placeholder="Participante ${count+1}" style="flex:1">`;
+    list.appendChild(div);
+    div.querySelector('input').focus();
+    count++;
+  });
+
+  document.getElementById('fs-launch')?.addEventListener('click', async () => {
+    const total  = +document.getElementById('fs-total').value  || 0;
+    const months = +document.getElementById('fs-months').value || 0;
+    const start  = document.getElementById('fs-start').value;
+    const names  = [...document.querySelectorAll('.fs-p')].map(el => el.value.trim()).filter(Boolean);
+    if (!total||!months||!start) { alert('Completa todos los campos del paquete.'); return; }
+    if (!names.length) { alert('Agrega al menos un participante.'); return; }
+    await saveConfig({
+      total_sessions: total, period_months: months, start_date: start,
+      people: names.map((name,i) => ({ id: i+1, name })),
+      donations: []
+    });
+  });
+}
+
+function bindPersonSelect() {
+  document.querySelectorAll('.person-pick').forEach(btn => {
+    btn.addEventListener('click', () => {
+      S.personId = +btn.dataset.pid;
+      localStorage.setItem('gym_pid', S.personId);
+      render();
+    });
+  });
+
+  document.getElementById('btn-admin-login')?.addEventListener('click', () => {
+    const pass = prompt('Contraseña de administrador:');
+    if (pass === ADMIN_PASS) {
+      S.isAdmin = true;
+      S.personId = S.config.people[0]?.id || null;
+      if (S.personId) localStorage.setItem('gym_pid', S.personId);
+      render();
+    } else if (pass !== null) {
+      alert('Contraseña incorrecta.');
+    }
+  });
+}
+
+function bindApp() {
+  // Header
+  document.getElementById('btn-change-person')?.addEventListener('click', () => {
+    S.personId = null; S.sheet = null; S.pending = null;
+    localStorage.removeItem('gym_pid'); render();
+  });
+  document.getElementById('exit-admin')?.addEventListener('click', e => {
+    e.preventDefault(); S.isAdmin = false; S.tab = 'calendar'; render();
+  });
+
+  // Tabs
+  document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
+    S.tab = btn.dataset.tab; S.sheet = null; S.pending = null; render();
+  }));
+
+  // Navegación mes
+  document.getElementById('prev-m')?.addEventListener('click', () => {
+    S.cm--; if (S.cm<0){S.cm=11;S.cy--;} S.sheet=null; render();
+  });
+  document.getElementById('next-m')?.addEventListener('click', () => {
+    S.cm++; if (S.cm>11){S.cm=0;S.cy++;} S.sheet=null; render();
+  });
+
+  // Días del calendario
+  document.querySelectorAll('.cal-day[data-date]').forEach(el => {
+    el.addEventListener('click', () => {
+      S.sheet = { date: el.dataset.date }; S.pending = null; render();
+    });
+  });
+
+  // Backdrop
+  document.getElementById('backdrop')?.addEventListener('click', () => {
+    S.sheet = null; S.pending = null; render();
+  });
+
+  // Añadir sesión — clic en fila vacía
+  document.querySelectorAll('.p-add-row').forEach(el => {
+    if (!el.dataset.pid) return;
+    el.addEventListener('click', () => {
+      S.pending = { personId: +el.dataset.pid, date: el.dataset.date };
+      render();
+      setTimeout(() => document.getElementById('add-time')?.focus(), 50);
+    });
+  });
+
+  // Confirmar añadir
+  document.getElementById('confirm-add')?.addEventListener('click', async () => {
+    const input = document.getElementById('add-time');
+    const time = input?.value;
+    if (!time) { input?.focus(); alert('Selecciona una hora.'); return; }
+    if (![0,15,30,45].includes(+time.split(':')[1])) {
+      alert('Horario en intervalos de 15 min.\nEj: 06:00 · 06:15 · 06:30 · 06:45');
+      input?.focus(); return;
+    }
+    await addSession(S.pending.personId, S.pending.date, time);
+  });
+  document.getElementById('add-time')?.addEventListener('keydown', e => {
+    if (e.key==='Enter') document.getElementById('confirm-add')?.click();
+  });
+  document.getElementById('cancel-add')?.addEventListener('click', () => { S.pending=null; render(); });
+
+  // Editar hora existente
+  document.querySelectorAll('[data-edit]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      S.pending = { sessionId: btn.dataset.edit }; render();
+      setTimeout(() => document.getElementById('edit-time')?.focus(), 50);
+    });
+  });
+  document.getElementById('confirm-edit')?.addEventListener('click', async () => {
+    const input = document.getElementById('edit-time');
+    const time = input?.value;
+    if (!time) { input?.focus(); alert('Selecciona una hora.'); return; }
+    if (![0,15,30,45].includes(+time.split(':')[1])) {
+      alert('Horario en intervalos de 15 min.'); input?.focus(); return;
+    }
+    await updateSessionTime(document.getElementById('confirm-edit').dataset.sid, time);
+  });
+  document.getElementById('edit-time')?.addEventListener('keydown', e => {
+    if (e.key==='Enter') document.getElementById('confirm-edit')?.click();
+  });
+  document.getElementById('cancel-edit')?.addEventListener('click', () => { S.pending=null; render(); });
+
+  // Eliminar sesión
+  document.querySelectorAll('[data-del]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('¿Eliminar esta sesión?')) return;
+      await removeSession(btn.dataset.del);
+    });
+  });
+
+  // ── Admin ────────────────────────────────────────────
+  document.getElementById('adm-save-cfg')?.addEventListener('click', async () => {
+    const total  = +document.getElementById('adm-total').value  || 0;
+    const months = +document.getElementById('adm-months').value || 0;
+    const start  = document.getElementById('adm-start').value;
+    if (!total||!months||!start) { alert('Completa todos los campos.'); return; }
+    const ok = await saveConfig({ ...S.config, total_sessions: total, period_months: months, start_date: start });
+    if (ok) alert('Configuración guardada.');
+  });
+
+  document.getElementById('adm-add-p')?.addEventListener('click', () => {
+    if (S.config.people.length >= 10) return;
+    const list = document.getElementById('adm-people');
+    const idx  = list.children.length;
+    const div  = document.createElement('div');
+    div.className = 'row';
+    div.innerHTML = `
+      <div style="width:12px;height:12px;border-radius:50%;background:${PC[idx%10]};flex-shrink:0"></div>
+      <input class="input adm-pname" data-pid="new_${Date.now()}" type="text" placeholder="Nombre" style="flex:1">
+      <button class="btn btn-sm btn-danger adm-rm-new" style="flex-shrink:0">×</button>`;
+    list.appendChild(div);
+    div.querySelector('input').focus();
+    div.querySelector('.adm-rm-new').addEventListener('click', () => div.remove());
+  });
+
+  document.querySelectorAll('.adm-rm-p').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const pid = +btn.dataset.pid;
+      const p   = S.config.people.find(p => p.id === pid);
+      const n   = S.sessions.filter(s => s.person_id === pid).length;
+      if (!confirm(`¿Eliminar a "${p?.name}"?${n?` También se borrarán sus ${n} sesiones.`:''}`)) return;
+      for (const s of S.sessions.filter(s => s.person_id === pid)) {
+        await sb.from('gym_sessions').delete().eq('id', s.id);
+      }
+      const people = S.config.people.filter(p => p.id !== pid);
+      await saveConfig({ ...S.config, people });
+      S.sessions = S.sessions.filter(s => s.person_id !== pid);
+      if (S.personId === pid) {
+        S.personId = people[0]?.id || null;
+        localStorage.setItem('gym_pid', S.personId || '');
+      }
+      render();
+    });
+  });
+
+  document.getElementById('adm-save-people')?.addEventListener('click', async () => {
+    const inputs = document.querySelectorAll('.adm-pname');
+    let maxId = Math.max(0, ...S.config.people.map(p => p.id));
+    const people = [];
+    inputs.forEach(inp => {
+      const name = inp.value.trim();
+      if (!name) return;
+      const pid  = inp.dataset.pid;
+      people.push({ id: pid.startsWith('new_') ? ++maxId : +pid, name });
+    });
+    if (!people.length) { alert('Debe haber al menos un participante.'); return; }
+    const ok = await saveConfig({ ...S.config, people });
+    if (ok) alert('Participantes guardados.');
+  });
+
+  // Donar sesión
+  document.querySelectorAll('.donate-btn').forEach(btn => {
+    btn.addEventListener('click', () => { S.donating = +btn.dataset.pid; render(); });
+  });
+  document.querySelectorAll('.do-donate').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const from = +btn.dataset.from, to = +btn.dataset.to;
+      const fromName = S.config.people.find(p=>p.id===from)?.name;
+      const toName   = S.config.people.find(p=>p.id===to  )?.name;
+      if (!confirm(`¿Donar una sesión de ${fromName} a ${toName}?`)) return;
+      await donateSess(from, to);
+    });
+  });
+  document.querySelectorAll('.cancel-donate').forEach(btn => {
+    btn.addEventListener('click', () => { S.donating = null; render(); });
+  });
+  document.querySelectorAll('.revoke-don').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('¿Revocar esta donación?')) return;
+      await revokeDonation(+btn.dataset.id);
+    });
+  });
+
+  document.getElementById('adm-csv')?.addEventListener('click',  exportCSV);
+  document.getElementById('adm-xlsx')?.addEventListener('click', exportXLSX);
+
+  document.getElementById('adm-reset')?.addEventListener('click', async () => {
+    if (!confirm('¿Eliminar TODAS las sesiones? No se puede deshacer.')) return;
+    if (!confirm('¿Estás completamente seguro?')) return;
+    const ids = S.sessions.map(s => s.id);
+    if (ids.length) {
+      const { error } = await sb.from('gym_sessions').delete().in('id', ids);
+      if (error) { alert('Error: ' + error.message); return; }
+    }
+    S.sessions = []; S.sheet = null; render();
+    alert('Todas las sesiones han sido eliminadas.');
+  });
+}
+
+
+// ══════════════════════════════════════════════════════
+//  EXPORTAR
+// ══════════════════════════════════════════════════════
+
+function exportCSV() {
+  const t = hoy();
+  const rows = [['Persona','Fecha','Hora','Estado'],
+    ...[...S.sessions]
+      .sort((a,b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time))
+      .map(s => [
+        S.config.people.find(p => p.id===s.person_id)?.name || '?',
+        s.date, s.time, s.date<=t ? 'Usado' : 'Programado'
+      ])
+  ];
+  const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8'})),
+    download: 'sesiones_gym.csv'
+  });
+  a.click();
+}
+
+function exportXLSX() {
+  if (!window.XLSX) { alert('La librería aún no cargó.'); return; }
+  if (!S.sessions.length) { alert('No hay sesiones para exportar.'); return; }
+  const t = hoy();
+  const data = [...S.sessions]
+    .sort((a,b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time))
+    .map(s => ({
+      Persona: S.config.people.find(p => p.id===s.person_id)?.name || '?',
+      Fecha: s.date, Hora: s.time,
+      Estado: s.date<=t ? 'Usado' : 'Programado'
+    }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Sesiones');
+  XLSX.writeFile(wb, 'sesiones_gym.xlsx');
+}
+
+
+// ══════════════════════════════════════════════════════
+//  INICIO
+// ══════════════════════════════════════════════════════
+
+loadAll().then(() => { if (sb) subscribeRealtime(); });
+</script>
+</body>
+</html>

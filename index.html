@@ -267,7 +267,9 @@ let S = {
   packages: [],      // todos los paquetes (histórico + el activo) {id,total_sessions,period_months,start_date,people,donations,active,created_at}
   sessionsCache: {}, // package_id -> [{id, person_id, date, time, package_id}]
   personId: null,    // número — persona actual (guardada en localStorage)
+  personPin: null,   // PIN de la persona actual ('' si no tiene PIN configurado); null = aún sin verificar
   isAdmin:  false,
+  adminPass: null,   // contraseña ingresada, se reenvía a las funciones RPC de admin
   tab:      'calendar',
   viewPkgId: null,   // id del paquete que se está viendo; null = paquete activo
   cy: now.getFullYear(),
@@ -385,41 +387,99 @@ async function switchView(pkgId) {
   render();
 }
 
-async function saveConfig(patch) {
-  const pkg = activePkg();
-  const { data, error } = await sb.from('gym_packages').update(patch).eq('id', pkg.id).select().single();
-  if (error) { alert('Error guardando config: ' + error.message); return false; }
-  S.packages = S.packages.map(p => p.id === pkg.id ? data : p);
-  render(); return true;
+async function reloadPackages() {
+  const { data, error } = await sb.from('gym_packages').select('*').order('created_at', { ascending: true });
+  if (error) { alert('Error recargando paquetes: ' + error.message); return; }
+  S.packages = data || [];
+  render();
 }
 
 async function createFirstPackage(cfg) {
-  const { data, error } = await sb.from('gym_packages')
-    .insert({ ...cfg, active: true, donations: [] }).select().single();
+  const { error } = await sb.rpc('create_first_package', {
+    p_total: cfg.total_sessions, p_months: cfg.period_months, p_start: cfg.start_date, p_people: cfg.people
+  });
   if (error) { alert('Error creando paquete: ' + error.message); return false; }
-  S.packages = [data];
-  S.sessionsCache[data.id] = [];
-  render(); return true;
+  await reloadPackages();
+  S.sessionsCache[activePkg().id] = [];
+  return true;
+}
+
+async function adminUpdateConfig(total, months, start) {
+  const { error } = await sb.rpc('admin_update_config', {
+    p_password: S.adminPass, p_total: total, p_months: months, p_start: start
+  });
+  if (error) { alert('Error guardando configuración: ' + error.message); return false; }
+  await reloadPackages();
+  return true;
+}
+
+async function adminUpdatePeople(people) {
+  const { error } = await sb.rpc('admin_update_people', { p_password: S.adminPass, p_people: people });
+  if (error) { alert('Error guardando participantes: ' + error.message); return false; }
+  await reloadPackages();
+  return true;
+}
+
+async function adminRemoveParticipant(personId) {
+  const pkg = activePkg();
+  const { error } = await sb.rpc('admin_remove_participant', { p_password: S.adminPass, p_person_id: personId });
+  if (error) { alert('Error eliminando participante: ' + error.message); return false; }
+  S.sessionsCache[pkg.id] = sessionsOf(pkg.id).filter(s => s.person_id !== personId);
+  await reloadPackages();
+  return true;
+}
+
+async function adminDeleteAllSessions() {
+  const pkg = activePkg();
+  const { error } = await sb.rpc('admin_delete_all_sessions', { p_password: S.adminPass });
+  if (error) { alert('Error: ' + error.message); return false; }
+  S.sessionsCache[pkg.id] = [];
+  return true;
 }
 
 async function startNewPackage(cfg) {
-  const old = activePkg();
-  const { error: e1 } = await sb.from('gym_packages').update({ active: false }).eq('id', old.id);
-  if (e1) { alert('Error archivando paquete actual: ' + e1.message); return false; }
-  const { data, error: e2 } = await sb.from('gym_packages')
-    .insert({ ...cfg, active: true, donations: [] }).select().single();
-  if (e2) { alert('Error creando paquete: ' + e2.message); return false; }
-  S.packages = S.packages.map(p => p.id === old.id ? { ...p, active: false } : p).concat(data);
-  S.sessionsCache[data.id] = [];
+  const { error } = await sb.rpc('admin_start_new_package', {
+    p_password: S.adminPass, p_total: cfg.total_sessions, p_months: cfg.period_months,
+    p_start: cfg.start_date, p_people: cfg.people
+  });
+  if (error) { alert('Error creando paquete: ' + error.message); return false; }
+  await reloadPackages();
+  S.sessionsCache[activePkg().id] = [];
   S.viewPkgId = null; S.newPkgOpen = false; S.tab = 'calendar';
-  S.personId = null; localStorage.removeItem('gym_pid');
+  S.personId = null; S.personPin = null; localStorage.removeItem('gym_pid');
   render(); return true;
+}
+
+// ── PIN de persona ───────────────────────────────────────
+// Verifica (una sola vez por sesión de navegador) el PIN de "personName".
+// Si la persona no tiene PIN configurado, no pide nada. Devuelve false si
+// el usuario cancela o el PIN es incorrecto.
+async function ensurePersonPin(personName) {
+  if (S.personPin != null) return true;
+  const { data: hasPin, error } = await sb.rpc('person_has_pin', { p_person_name: personName });
+  if (error) { alert('Error verificando PIN: ' + error.message); return false; }
+  if (!hasPin) { S.personPin = ''; return true; }
+  const pin = prompt(`PIN de ${personName}:`);
+  if (pin === null) return false;
+  const { data: ok, error: e2 } = await sb.rpc('check_person_pin', { p_person_name: personName, p_pin: pin });
+  if (e2) { alert('Error verificando PIN: ' + e2.message); return false; }
+  if (!ok) { alert('PIN incorrecto.'); return false; }
+  S.personPin = pin;
+  return true;
+}
+
+function actorParams(personName) {
+  if (S.isAdmin) return { p_admin_password: S.adminPass };
+  return { p_actor_name: personName, p_actor_pin: S.personPin };
 }
 
 async function addSession(personId, date, time) {
   const pkg = viewPkg();
-  const { data, error } = await sb.from('gym_sessions')
-    .insert({ person_id: personId, date, time, package_id: pkg.id }).select().single();
+  const personName = pkg.people.find(p => p.id === personId)?.name || '';
+  if (!S.isAdmin && !(await ensurePersonPin(personName))) { S.pending = null; render(); return; }
+  const { data, error } = await sb.rpc('add_session', {
+    p_package_id: pkg.id, p_person_id: personId, p_date: date, p_time: time, ...actorParams(personName)
+  });
   if (error) { alert('Error al guardar sesión: ' + error.message); return; }
   S.sessionsCache[pkg.id] = [...sessionsOf(pkg.id), data];
   S.pending = null; render();
@@ -427,7 +487,9 @@ async function addSession(personId, date, time) {
 
 async function removeSession(id) {
   const pkg = viewPkg();
-  const { error } = await sb.from('gym_sessions').delete().eq('id', id);
+  const personName = pkg.people.find(p => p.id === sessionsOf(pkg.id).find(s => s.id === id)?.person_id)?.name || '';
+  if (!S.isAdmin && !(await ensurePersonPin(personName))) return;
+  const { error } = await sb.rpc('delete_session', { p_session_id: id, ...actorParams(personName) });
   if (error) { alert('Error al eliminar: ' + error.message); return; }
   S.sessionsCache[pkg.id] = sessionsOf(pkg.id).filter(s => s.id !== id);
   S.pending = null; render();
@@ -435,7 +497,9 @@ async function removeSession(id) {
 
 async function updateSessionTime(id, time) {
   const pkg = viewPkg();
-  const { error } = await sb.from('gym_sessions').update({ time }).eq('id', id);
+  const personName = pkg.people.find(p => p.id === sessionsOf(pkg.id).find(s => s.id === id)?.person_id)?.name || '';
+  if (!S.isAdmin && !(await ensurePersonPin(personName))) return;
+  const { error } = await sb.rpc('update_session_time', { p_session_id: id, p_time: time, ...actorParams(personName) });
   if (error) { alert('Error al actualizar hora: ' + error.message); return; }
   S.sessionsCache[pkg.id] = sessionsOf(pkg.id).map(s => s.id === id ? { ...s, time } : s);
   S.pending = null; render();
@@ -444,15 +508,18 @@ async function updateSessionTime(id, time) {
 // ── Donaciones ──────────────────────────────────────────
 async function donateSess(fromId, toId) {
   const pkg = activePkg();
-  const donations = [...(pkg.donations||[]), { id: Date.now(), from: fromId, to: toId }];
-  const ok = await saveConfig({ donations });
-  if (ok) { S.donating = null; render(); }
+  const fromName = pkg.people.find(p => p.id === fromId)?.name || '';
+  if (!S.isAdmin && !(await ensurePersonPin(fromName))) return;
+  const { error } = await sb.rpc('donate_session', { p_from: fromId, p_to: toId, ...actorParams(fromName) });
+  if (error) { alert('Error al donar: ' + error.message); return; }
+  await reloadPackages();
+  S.donating = null; render();
 }
 
 async function revokeDonation(donId) {
-  const pkg = activePkg();
-  const donations = (pkg.donations||[]).filter(d => d.id !== donId);
-  await saveConfig({ donations });
+  const { error } = await sb.rpc('admin_revoke_donation', { p_password: S.adminPass, p_don_id: donId });
+  if (error) { alert('Error: ' + error.message); return; }
+  await reloadPackages();
 }
 
 function subscribeRealtime() {
@@ -837,12 +904,14 @@ function tplAdmin() {
   <div class="card gap">
     <p style="font-size:13px;font-weight:500;color:var(--text2)">Participantes y cuotas</p>
     <p class="text-xs text-muted">Si dejas la cuota vacía, se reparte en partes iguales (${spp()} c/u). Total asignado: ${pkg.people.reduce((a,p)=>a+(p.quota ?? spp()),0)}/${pkg.total_sessions}</p>
+    <p class="text-xs text-muted">Asigna un PIN a cada persona para que solo ella pueda agendar/editar/borrar sus propias clases. Sin PIN, cualquiera puede entrar con ese nombre.</p>
     <div id="adm-people" class="gap">
       ${pkg.people.map((p,i) => `
         <div class="row">
           <div style="width:12px;height:12px;border-radius:50%;background:${PC[i%10]};flex-shrink:0"></div>
           <input class="input adm-pname" data-pid="${p.id}" type="text" value="${p.name}" style="flex:2">
           <input class="input adm-pquota" data-pid="${p.id}" type="number" min="0" placeholder="cuota" value="${p.quota ?? ''}" style="flex:1;min-width:70px">
+          <button class="btn btn-sm adm-set-pin" data-pid="${p.id}">PIN</button>
           <button class="btn btn-sm btn-danger adm-rm-p" data-pid="${p.id}">×</button>
         </div>
       `).join('')}
@@ -957,8 +1026,11 @@ function bindSetup() {
 
 function bindPersonSelect() {
   document.querySelectorAll('.person-pick').forEach(btn => {
-    btn.addEventListener('click', () => {
-      S.personId = +btn.dataset.pid;
+    btn.addEventListener('click', async () => {
+      const pid = +btn.dataset.pid;
+      const person = activePkg().people.find(p => p.id === pid);
+      if (!(await ensurePersonPin(person?.name || ''))) return;
+      S.personId = pid;
       localStorage.setItem('gym_pid', S.personId);
       render();
     });
@@ -967,7 +1039,7 @@ function bindPersonSelect() {
   document.getElementById('btn-admin-login')?.addEventListener('click', () => {
     const pass = prompt('Contraseña de administrador:');
     if (pass === ADMIN_PASS) {
-      S.isAdmin = true;
+      S.isAdmin = true; S.adminPass = pass; S.personPin = '';
       S.personId = activePkg().people[0]?.id || null;
       if (S.personId) localStorage.setItem('gym_pid', S.personId);
       render();
@@ -980,11 +1052,11 @@ function bindPersonSelect() {
 function bindApp() {
   // Header
   document.getElementById('btn-change-person')?.addEventListener('click', () => {
-    S.personId = null; S.sheet = null; S.pending = null; S.viewPkgId = null;
+    S.personId = null; S.personPin = null; S.sheet = null; S.pending = null; S.viewPkgId = null;
     localStorage.removeItem('gym_pid'); render();
   });
   document.getElementById('exit-admin')?.addEventListener('click', e => {
-    e.preventDefault(); S.isAdmin = false; S.tab = 'calendar'; render();
+    e.preventDefault(); S.isAdmin = false; S.adminPass = null; S.tab = 'calendar'; render();
   });
   document.getElementById('pkg-switcher')?.addEventListener('change', e => switchView(+e.target.value));
   document.getElementById('back-to-active')?.addEventListener('click', e => {
@@ -1077,7 +1149,7 @@ function bindApp() {
     const months = +document.getElementById('adm-months').value || 0;
     const start  = document.getElementById('adm-start').value;
     if (!total||!months||!start) { alert('Completa todos los campos.'); return; }
-    const ok = await saveConfig({ total_sessions: total, period_months: months, start_date: start });
+    const ok = await adminUpdateConfig(total, months, start);
     if (ok) alert('Configuración guardada.');
   });
 
@@ -1105,17 +1177,27 @@ function bindApp() {
       const p   = pkg.people.find(p => p.id === pid);
       const n   = sessionsOf(pkg.id).filter(s => s.person_id === pid).length;
       if (!confirm(`¿Eliminar a "${p?.name}"?${n?` También se borrarán sus ${n} sesiones.`:''}`)) return;
-      for (const s of sessionsOf(pkg.id).filter(s => s.person_id === pid)) {
-        await sb.from('gym_sessions').delete().eq('id', s.id);
-      }
-      const people = pkg.people.filter(p => p.id !== pid);
-      await saveConfig({ people });
-      S.sessionsCache[pkg.id] = sessionsOf(pkg.id).filter(s => s.person_id !== pid);
+      const ok = await adminRemoveParticipant(pid);
+      if (!ok) return;
       if (S.personId === pid) {
-        S.personId = people[0]?.id || null;
+        S.personId = activePkg().people[0]?.id || null;
         localStorage.setItem('gym_pid', S.personId || '');
       }
       render();
+    });
+  });
+
+  document.querySelectorAll('.adm-set-pin').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const pid = +btn.dataset.pid;
+      const person = activePkg().people.find(p => p.id === pid);
+      const pin = prompt(`Nuevo PIN para ${person?.name} (déjalo vacío para cancelar):`);
+      if (!pin) return;
+      const { error } = await sb.rpc('admin_set_person_pin', {
+        p_password: S.adminPass, p_person_name: person.name, p_pin: pin
+      });
+      if (error) { alert('Error asignando PIN: ' + error.message); return; }
+      alert(`PIN actualizado para ${person.name}.`);
     });
   });
 
@@ -1133,7 +1215,7 @@ function bindApp() {
       people.push(quota != null ? { id, name, quota } : { id, name });
     });
     if (!people.length) { alert('Debe haber al menos un participante.'); return; }
-    const ok = await saveConfig({ people });
+    const ok = await adminUpdatePeople(people);
     if (ok) alert('Participantes guardados.');
   });
 
@@ -1168,13 +1250,9 @@ function bindApp() {
   document.getElementById('adm-reset')?.addEventListener('click', async () => {
     if (!confirm('Recomendado: descarga un respaldo completo antes de continuar (botones arriba). ¿Eliminar TODAS las sesiones de este paquete? No se puede deshacer.')) return;
     if (!confirm('¿Estás completamente seguro?')) return;
-    const pkg = activePkg();
-    const ids = sessionsOf(pkg.id).map(s => s.id);
-    if (ids.length) {
-      const { error } = await sb.from('gym_sessions').delete().in('id', ids);
-      if (error) { alert('Error: ' + error.message); return; }
-    }
-    S.sessionsCache[pkg.id] = []; S.sheet = null; render();
+    const ok = await adminDeleteAllSessions();
+    if (!ok) return;
+    S.sheet = null; render();
     alert('Todas las sesiones de este paquete han sido eliminadas.');
   });
 

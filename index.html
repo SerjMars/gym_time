@@ -264,16 +264,18 @@ const fwd  = (y,m) => { const d = new Date(y,m,1).getDay(); return (d+6)%7; };
 // ── Estado global ──────────────────────────────────────
 const now = new Date();
 let S = {
-  config:   null,    // {id, total_sessions, period_months, start_date, people:[{id,name}]}
-  sessions: [],      // [{id, person_id, date, time}]
+  packages: [],      // todos los paquetes (histórico + el activo) {id,total_sessions,period_months,start_date,people,donations,active,created_at}
+  sessionsCache: {}, // package_id -> [{id, person_id, date, time, package_id}]
   personId: null,    // número — persona actual (guardada en localStorage)
   isAdmin:  false,
   tab:      'calendar',
+  viewPkgId: null,   // id del paquete que se está viendo; null = paquete activo
   cy: now.getFullYear(),
   cm: now.getMonth(),
   sheet:    null,    // {date:'YYYY-MM-DD'} cuando el bottom sheet está abierto
   pending:  null,    // {personId, date} | {sessionId} según la acción
   donating: null,    // personId que está eligiendo a quién donar
+  newPkgOpen: false, // formulario "nuevo paquete" abierto en Admin
   loading:  true,
   error:    null,
 };
@@ -282,20 +284,32 @@ let S = {
 let sb = null;
 
 // ── Derived helpers ────────────────────────────────────
-const spp = () => S.config
-  ? Math.floor(S.config.total_sessions / Math.max(S.config.people.length, 1))
-  : 0;
+const activePkg     = () => S.packages.find(p => p.active) || null;
+const viewPkg        = () => S.packages.find(p => p.id === (S.viewPkgId ?? activePkg()?.id)) || activePkg();
+const isActiveView  = () => !!viewPkg() && viewPkg().id === activePkg()?.id;
+const sessionsOf    = pkgId => S.sessionsCache[pkgId] || [];
+const curSessions   = () => sessionsOf(viewPkg()?.id);
+
+const spp = () => {
+  const pkg = viewPkg();
+  return pkg ? Math.floor(pkg.total_sessions / Math.max(pkg.people.length, 1)) : 0;
+};
+
+const quotaOf = pid => {
+  const p = (viewPkg()?.people || []).find(p => p.id === pid);
+  return p?.quota ?? spp();
+};
 
 const effQuota = pid => {
-  const base = spp();
-  const d = S.config?.donations || [];
+  const base = quotaOf(pid);
+  const d = viewPkg()?.donations || [];
   return base - d.filter(x => x.from === pid).length + d.filter(x => x.to === pid).length;
 };
 
 const statsP = () => {
   const t = hoy(), r = {};
-  (S.config?.people || []).forEach(p => { r[p.id] = { u: 0, s: 0 }; });
-  S.sessions.forEach(({ person_id: pid, date: d }) => {
+  (viewPkg()?.people || []).forEach(p => { r[p.id] = { u: 0, s: 0 }; });
+  curSessions().forEach(({ person_id: pid, date: d }) => {
     if (r[pid]) d <= t ? r[pid].u++ : r[pid].s++;
   });
   return r;
@@ -303,12 +317,12 @@ const statsP = () => {
 
 const byDate = () => {
   const m = {};
-  S.sessions.forEach(s => { (m[s.date] ??= []).push(s); });
+  curSessions().forEach(s => { (m[s.date] ??= []).push(s); });
   return m;
 };
 
 const colorOf = pid => {
-  const idx = (S.config?.people || []).findIndex(p => p.id === pid);
+  const idx = (viewPkg()?.people || []).findIndex(p => p.id === pid);
   return PC[Math.max(0, idx) % 10];
 };
 
@@ -337,18 +351,19 @@ async function loadAll() {
     S.loading = false; render(); return;
   }
 
-  const { data: cfg, error: e1 } = await sb.from('gym_config').select('*').maybeSingle();
+  const { data: pkgs, error: e1 } = await sb.from('gym_packages').select('*').order('created_at', { ascending: true });
   if (e1) { S.error = e1.message; S.loading = false; render(); return; }
 
-  S.config = cfg;
+  S.packages = pkgs || [];
 
-  if (cfg) {
-    const { data: sess, error: e2 } = await sb.from('gym_sessions').select('*');
+  const act = activePkg();
+  if (act) {
+    const { data: sess, error: e2 } = await sb.from('gym_sessions').select('*').eq('package_id', act.id);
     if (e2) { S.error = e2.message; S.loading = false; render(); return; }
-    S.sessions = sess || [];
+    S.sessionsCache[act.id] = sess || [];
 
     const saved = localStorage.getItem('gym_pid');
-    if (saved && cfg.people.find(p => p.id === +saved)) {
+    if (saved && act.people.find(p => p.id === +saved)) {
       S.personId = +saved;
     }
   }
@@ -356,62 +371,118 @@ async function loadAll() {
   S.loading = false; render();
 }
 
-async function saveConfig(cfg) {
-  const { error } = await sb.from('gym_config').upsert({ id: 1, ...cfg });
+async function loadPkgSessions(pkgId) {
+  if (S.sessionsCache[pkgId]) return;
+  const { data, error } = await sb.from('gym_sessions').select('*').eq('package_id', pkgId);
+  if (error) { alert('Error al cargar sesiones: ' + error.message); return; }
+  S.sessionsCache[pkgId] = data || [];
+}
+
+async function switchView(pkgId) {
+  await loadPkgSessions(pkgId);
+  S.viewPkgId = pkgId === activePkg()?.id ? null : pkgId;
+  S.tab = 'calendar'; S.sheet = null; S.pending = null; S.donating = null;
+  render();
+}
+
+async function saveConfig(patch) {
+  const pkg = activePkg();
+  const { data, error } = await sb.from('gym_packages').update(patch).eq('id', pkg.id).select().single();
   if (error) { alert('Error guardando config: ' + error.message); return false; }
-  S.config = { id: 1, ...cfg };
+  S.packages = S.packages.map(p => p.id === pkg.id ? data : p);
+  render(); return true;
+}
+
+async function createFirstPackage(cfg) {
+  const { data, error } = await sb.from('gym_packages')
+    .insert({ ...cfg, active: true, donations: [] }).select().single();
+  if (error) { alert('Error creando paquete: ' + error.message); return false; }
+  S.packages = [data];
+  S.sessionsCache[data.id] = [];
+  render(); return true;
+}
+
+async function startNewPackage(cfg) {
+  const old = activePkg();
+  const { error: e1 } = await sb.from('gym_packages').update({ active: false }).eq('id', old.id);
+  if (e1) { alert('Error archivando paquete actual: ' + e1.message); return false; }
+  const { data, error: e2 } = await sb.from('gym_packages')
+    .insert({ ...cfg, active: true, donations: [] }).select().single();
+  if (e2) { alert('Error creando paquete: ' + e2.message); return false; }
+  S.packages = S.packages.map(p => p.id === old.id ? { ...p, active: false } : p).concat(data);
+  S.sessionsCache[data.id] = [];
+  S.viewPkgId = null; S.newPkgOpen = false; S.tab = 'calendar';
+  S.personId = null; localStorage.removeItem('gym_pid');
   render(); return true;
 }
 
 async function addSession(personId, date, time) {
+  const pkg = viewPkg();
   const { data, error } = await sb.from('gym_sessions')
-    .insert({ person_id: personId, date, time }).select().single();
+    .insert({ person_id: personId, date, time, package_id: pkg.id }).select().single();
   if (error) { alert('Error al guardar sesión: ' + error.message); return; }
-  S.sessions = [...S.sessions, data];
+  S.sessionsCache[pkg.id] = [...sessionsOf(pkg.id), data];
   S.pending = null; render();
 }
 
 async function removeSession(id) {
+  const pkg = viewPkg();
   const { error } = await sb.from('gym_sessions').delete().eq('id', id);
   if (error) { alert('Error al eliminar: ' + error.message); return; }
-  S.sessions = S.sessions.filter(s => s.id !== id);
+  S.sessionsCache[pkg.id] = sessionsOf(pkg.id).filter(s => s.id !== id);
   S.pending = null; render();
 }
 
 async function updateSessionTime(id, time) {
+  const pkg = viewPkg();
   const { error } = await sb.from('gym_sessions').update({ time }).eq('id', id);
   if (error) { alert('Error al actualizar hora: ' + error.message); return; }
-  S.sessions = S.sessions.map(s => s.id === id ? { ...s, time } : s);
+  S.sessionsCache[pkg.id] = sessionsOf(pkg.id).map(s => s.id === id ? { ...s, time } : s);
   S.pending = null; render();
 }
 
-// ── Tiempo real ────────────────────────────────────────
+// ── Donaciones ──────────────────────────────────────────
 async function donateSess(fromId, toId) {
-  const donations = [...(S.config.donations||[]), { id: Date.now(), from: fromId, to: toId }];
-  const ok = await saveConfig({ ...S.config, donations });
+  const pkg = activePkg();
+  const donations = [...(pkg.donations||[]), { id: Date.now(), from: fromId, to: toId }];
+  const ok = await saveConfig({ donations });
   if (ok) { S.donating = null; render(); }
 }
 
 async function revokeDonation(donId) {
-  const donations = (S.config.donations||[]).filter(d => d.id !== donId);
-  await saveConfig({ ...S.config, donations });
+  const pkg = activePkg();
+  const donations = (pkg.donations||[]).filter(d => d.id !== donId);
+  await saveConfig({ donations });
 }
 
 function subscribeRealtime() {
   sb.channel('gym-rt')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'gym_sessions' }, p => {
-      if (!S.sessions.find(s => s.id === p.new.id)) {
-        S.sessions = [...S.sessions, p.new]; render();
+      const pkgId = p.new.package_id;
+      if (S.sessionsCache[pkgId] && !S.sessionsCache[pkgId].find(s => s.id === p.new.id)) {
+        S.sessionsCache[pkgId] = [...S.sessionsCache[pkgId], p.new]; render();
       }
     })
     .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'gym_sessions' }, p => {
-      S.sessions = S.sessions.filter(s => s.id !== p.old.id); render();
+      const pkgId = p.old.package_id;
+      if (S.sessionsCache[pkgId]) {
+        S.sessionsCache[pkgId] = S.sessionsCache[pkgId].filter(s => s.id !== p.old.id); render();
+      }
     })
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'gym_sessions' }, p => {
-      S.sessions = S.sessions.map(s => s.id === p.new.id ? p.new : s); render();
+      const pkgId = p.new.package_id;
+      if (S.sessionsCache[pkgId]) {
+        S.sessionsCache[pkgId] = S.sessionsCache[pkgId].map(s => s.id === p.new.id ? p.new : s); render();
+      }
     })
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'gym_config' }, p => {
-      S.config = p.new; render();
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'gym_packages' }, p => {
+      if (p.eventType === 'DELETE') {
+        S.packages = S.packages.filter(x => x.id !== p.old.id);
+      } else {
+        const exists = S.packages.find(x => x.id === p.new.id);
+        S.packages = exists ? S.packages.map(x => x.id === p.new.id ? p.new : x) : [...S.packages, p.new];
+      }
+      render();
     })
     .subscribe();
 }
@@ -432,7 +503,7 @@ function render() {
     app.innerHTML = `<div class="loading"><p class="text-danger" style="text-align:center">${S.error}</p><button class="btn" onclick="loadAll()">Reintentar</button></div>`;
     return;
   }
-  if (!S.config) {
+  if (!S.packages.length) {
     app.innerHTML = tplFirstSetup(); bindSetup(); return;
   }
   if (!S.personId) {
@@ -484,7 +555,7 @@ function tplPersonSelect() {
   <p style="font-size:22px;font-weight:600;margin-bottom:6px">¿Quién eres?</p>
   <p class="text-muted text-sm" style="margin-bottom:24px">Elige tu nombre para continuar</p>
   <div class="gap">
-    ${S.config.people.map((p, i) => `
+    ${activePkg().people.map((p, i) => `
       <button class="btn btn-block person-pick" data-pid="${p.id}"
         style="justify-content:flex-start;gap:14px;padding:18px 16px;font-size:16px">
         <div style="width:14px;height:14px;border-radius:50%;background:${PC[i%10]};flex-shrink:0"></div>
@@ -501,18 +572,32 @@ function tplPersonSelect() {
 }
 
 // ── App principal ──────────────────────────────────────
+function tplPkgSwitcher() {
+  const sorted = [...S.packages].sort((a,b) => (b.created_at||'').localeCompare(a.created_at||''));
+  return `
+  <select id="pkg-switcher" class="input" style="width:auto;max-width:150px;font-size:12px;padding:8px 8px">
+    ${sorted.map(p => `<option value="${p.id}" ${p.id===viewPkg().id?'selected':''}>${p.active?'Actual':'Archivado'} · ${p.start_date}</option>`).join('')}
+  </select>`;
+}
+
 function tplApp() {
-  const p = S.config.people.find(p => p.id === S.personId);
-  const pi = S.config.people.findIndex(p => p.id === S.personId);
-  const pc = PC[pi % 10];
+  const pkg = viewPkg();
+  const act = activePkg();
+  const viewingHistory = !isActiveView();
+  const roster = act.people;
+  const p = roster.find(p => p.id === S.personId);
+  const pi = roster.findIndex(p => p.id === S.personId);
+  const pc = PC[Math.max(0,pi) % 10];
 
   return `
 ${S.isAdmin ? `<div class="admin-bar">⚙ Modo administrador · <a href="#" id="exit-admin" style="color:inherit;text-decoration:underline">salir</a></div>` : ''}
+${viewingHistory ? `<div class="admin-bar" style="background:#eef2ff;border-color:#c7d2fe;color:#3730a3">📦 Viendo paquete archivado (solo lectura) · <a href="#" id="back-to-active" style="color:inherit;text-decoration:underline">volver al actual</a></div>` : ''}
 <div class="header">
   <div class="header-info">
     <div class="header-title">Gym Tracker</div>
-    <div class="header-sub">${S.config.total_sessions} sesiones · ${S.config.people.length} personas · ${spp()} c/u</div>
+    <div class="header-sub">${pkg.total_sessions} sesiones · ${pkg.people.length} personas · ${spp()} c/u</div>
   </div>
+  ${S.packages.length>1 ? tplPkgSwitcher() : ''}
   <button class="person-pill" id="btn-change-person">
     <div style="width:9px;height:9px;border-radius:50%;background:${pc}"></div>
     ${p?.name || '?'}
@@ -521,10 +606,10 @@ ${S.isAdmin ? `<div class="admin-bar">⚙ Modo administrador · <a href="#" id="
 <div class="tabs">
   <button class="tab-btn ${S.tab==='calendar'?'active':''}" data-tab="calendar">Calendario</button>
   <button class="tab-btn ${S.tab==='summary'?'active':''}" data-tab="summary">Resumen</button>
-  ${S.isAdmin ? `<button class="tab-btn ${S.tab==='admin'?'active':''}" data-tab="admin">Admin</button>` : ''}
+  ${S.isAdmin && isActiveView() ? `<button class="tab-btn ${S.tab==='admin'?'active':''}" data-tab="admin">Admin</button>` : ''}
 </div>
 <div class="content">
-  ${S.tab==='calendar' ? tplCalendar() : S.tab==='summary' ? tplSummary() : tplAdmin()}
+  ${S.tab==='calendar' ? tplCalendar() : S.tab==='summary' ? tplSummary() : isActiveView() ? tplAdmin() : tplCalendar()}
 </div>
 ${S.sheet ? tplSheet() : ''}`;
 }
@@ -555,7 +640,7 @@ function tplCalendar() {
       <div class="cal-dots">
         ${dp.map(s => {
           const c = colorOf(s.person_id);
-          const nm = S.config.people.find(p=>p.id===s.person_id)?.name||'';
+          const nm = viewPkg().people.find(p=>p.id===s.person_id)?.name||'';
           return `<div class="cal-dot" style="background:${c};opacity:${isP?.5:1}" title="${nm} · ${s.time}"></div>`;
         }).join('')}
       </div>
@@ -563,11 +648,11 @@ function tplCalendar() {
   }).join('')}
 </div>
 <div style="padding:4px 16px 16px;display:flex;flex-wrap:wrap;gap:6px">
-  ${S.config.people.map((p,i) => {
+  ${viewPkg().people.map((p,i) => {
     const st = statsP()[p.id]||{u:0,s:0};
     return `<div style="display:flex;align-items:center;gap:5px;background:var(--surface);border:1px solid var(--border);border-radius:99px;padding:4px 10px;font-size:12px">
       <div style="width:8px;height:8px;border-radius:50%;background:${PC[i%10]}"></div>
-      ${p.name} · ${st.u+st.s}/${spp()}
+      ${p.name} · ${st.u+st.s}/${effQuota(p.id)}
     </div>`;
   }).join('')}
 </div>`;
@@ -592,11 +677,11 @@ function tplSheet() {
     </div>
   </div>
 
-  ${S.config.people.map((p, i) => {
+  ${viewPkg().people.map((p, i) => {
     const personSess = daySess.filter(s => s.person_id === p.id)
       .sort((a,b) => a.time.localeCompare(b.time));
     const c = PC[i%10];
-    const canEdit = p.id === S.personId || S.isAdmin;
+    const canEdit = isActiveView() && (p.id === S.personId || S.isAdmin);
     const st = stMap[p.id] || {u:0, s:0};
     const eq = effQuota(p.id);
     const full = st.u+st.s >= eq;
@@ -652,36 +737,37 @@ function tplSheet() {
 
 // ── Resumen ────────────────────────────────────────────
 function tplSummary() {
+  const pkg = viewPkg();
   const t = hoy(), st = statsP();
-  const totalUsed = S.sessions.filter(s => s.date <= t).length;
-  const tPct = Math.round(totalUsed / Math.max(S.config.total_sessions,1) * 100);
-  const sorted = [...S.config.people]
+  const totalUsed = curSessions().filter(s => s.date <= t).length;
+  const tPct = Math.round(totalUsed / Math.max(pkg.total_sessions,1) * 100);
+  const sorted = [...pkg.people]
     .sort((a,b) => (st[b.id]?.u+st[b.id]?.s||0) - (st[a.id]?.u+st[a.id]?.s||0));
-  const donations = S.config.donations || [];
+  const donations = pkg.donations || [];
 
   return `
 <div class="px pt pb">
   <div class="card" style="margin-bottom:10px">
     <div class="row" style="justify-content:space-between;margin-bottom:8px">
       <span class="text-sm" style="font-weight:500">Total del paquete</span>
-      <span class="text-xs text-muted">${totalUsed}/${S.config.total_sessions} (${tPct}%)</span>
+      <span class="text-xs text-muted">${totalUsed}/${pkg.total_sessions} (${tPct}%)</span>
     </div>
     <div class="progress"><div class="progress-inner"><div style="width:${tPct}%;background:var(--text);height:100%"></div></div></div>
   </div>
   <div class="gap">
     ${sorted.map(p => {
-      const i = Math.max(0, S.config.people.indexOf(p)) % 10;
+      const i = Math.max(0, pkg.people.indexOf(p)) % 10;
       const c = PC[i];
       const s = st[p.id]||{u:0,s:0};
       const eq = effQuota(p.id);
       const rem = eq - s.u - s.s;
       const upct = Math.round(s.u/Math.max(eq,1)*100);
       const spct = Math.round(s.s/Math.max(eq,1)*100);
-      const isMe = p.id === S.personId || S.isAdmin;
+      const isMe = isActiveView() && (p.id === S.personId || S.isAdmin);
       const donating = S.donating === p.id;
       const given    = donations.filter(d => d.from === p.id).length;
       const received = donations.filter(d => d.to   === p.id).length;
-      const others   = S.config.people.filter(o => o.id !== p.id);
+      const others   = pkg.people.filter(o => o.id !== p.id);
 
       return `
       <div class="card" style="border-left:3px solid ${c}">
@@ -718,7 +804,7 @@ function tplSummary() {
           <p class="text-xs text-muted" style="margin-bottom:8px">¿A quién le donas la sesión?</p>
           <div style="display:flex;flex-wrap:wrap;gap:6px">
             ${others.map((o,oi) => {
-              const oc = PC[S.config.people.findIndex(x=>x.id===o.id)%10];
+              const oc = PC[pkg.people.findIndex(x=>x.id===o.id)%10];
               return `<button class="btn btn-sm do-donate" data-from="${p.id}" data-to="${o.id}"
                 style="gap:6px;padding:8px 12px">
                 <div style="width:8px;height:8px;border-radius:50%;background:${oc}"></div>
@@ -737,33 +823,36 @@ function tplSummary() {
 
 // ── Panel admin ────────────────────────────────────────
 function tplAdmin() {
+  const pkg = activePkg();
   return `
 <div class="px pt pb gap">
   <div class="card gap">
     <p style="font-size:13px;font-weight:500;color:var(--text2)">Configuración del paquete</p>
-    <label class="gap" style="gap:4px"><span class="text-xs text-muted">Sesiones totales</span><input id="adm-total" class="input" type="number" value="${S.config.total_sessions}" min="1"></label>
-    <label class="gap" style="gap:4px"><span class="text-xs text-muted">Período (meses)</span><input id="adm-months" class="input" type="number" value="${S.config.period_months}" min="1"></label>
-    <label class="gap" style="gap:4px"><span class="text-xs text-muted">Fecha de inicio</span><input id="adm-start" class="input" type="date" value="${S.config.start_date}"></label>
+    <label class="gap" style="gap:4px"><span class="text-xs text-muted">Sesiones totales</span><input id="adm-total" class="input" type="number" value="${pkg.total_sessions}" min="1"></label>
+    <label class="gap" style="gap:4px"><span class="text-xs text-muted">Período (meses)</span><input id="adm-months" class="input" type="number" value="${pkg.period_months}" min="1"></label>
+    <label class="gap" style="gap:4px"><span class="text-xs text-muted">Fecha de inicio</span><input id="adm-start" class="input" type="date" value="${pkg.start_date}"></label>
     <button id="adm-save-cfg" class="btn btn-primary">Guardar configuración</button>
   </div>
 
   <div class="card gap">
-    <p style="font-size:13px;font-weight:500;color:var(--text2)">Participantes</p>
+    <p style="font-size:13px;font-weight:500;color:var(--text2)">Participantes y cuotas</p>
+    <p class="text-xs text-muted">Si dejas la cuota vacía, se reparte en partes iguales (${spp()} c/u). Total asignado: ${pkg.people.reduce((a,p)=>a+(p.quota ?? spp()),0)}/${pkg.total_sessions}</p>
     <div id="adm-people" class="gap">
-      ${S.config.people.map((p,i) => `
+      ${pkg.people.map((p,i) => `
         <div class="row">
           <div style="width:12px;height:12px;border-radius:50%;background:${PC[i%10]};flex-shrink:0"></div>
-          <input class="input adm-pname" data-pid="${p.id}" type="text" value="${p.name}" style="flex:1">
+          <input class="input adm-pname" data-pid="${p.id}" type="text" value="${p.name}" style="flex:2">
+          <input class="input adm-pquota" data-pid="${p.id}" type="number" min="0" placeholder="cuota" value="${p.quota ?? ''}" style="flex:1;min-width:70px">
           <button class="btn btn-sm btn-danger adm-rm-p" data-pid="${p.id}">×</button>
         </div>
       `).join('')}
     </div>
-    ${S.config.people.length<10 ? `<button id="adm-add-p" class="btn btn-block" style="border-style:dashed">+ Agregar participante</button>` : ''}
+    ${pkg.people.length<10 ? `<button id="adm-add-p" class="btn btn-block" style="border-style:dashed">+ Agregar participante</button>` : ''}
     <button id="adm-save-people" class="btn btn-primary">Guardar participantes</button>
   </div>
 
   <div class="card gap">
-    <p style="font-size:13px;font-weight:500;color:var(--text2)">Exportar datos</p>
+    <p style="font-size:13px;font-weight:500;color:var(--text2)">Exportar datos (paquete actual)</p>
     <div class="row">
       <button id="adm-csv" class="btn" style="flex:1">Exportar CSV</button>
       <button id="adm-xlsx" class="btn" style="flex:1">Exportar Excel</button>
@@ -771,13 +860,22 @@ function tplAdmin() {
   </div>
 
   <div class="card gap">
+    <p style="font-size:13px;font-weight:500;color:var(--text2)">Respaldo completo (todos los paquetes)</p>
+    <p class="text-xs text-muted">Descarga todas las clases de todos los paquetes (activos y archivados). Útil antes de borrar sesiones o iniciar un paquete nuevo, ya que en el plan gratuito de Supabase no hay forma de recuperar datos borrados.</p>
+    <div class="row">
+      <button id="adm-backup-xlsx" class="btn" style="flex:1">Respaldo Excel</button>
+      <button id="adm-backup-json" class="btn" style="flex:1">Respaldo JSON</button>
+    </div>
+  </div>
+
+  <div class="card gap">
     <p style="font-size:13px;font-weight:500;color:var(--text2)">Donaciones registradas</p>
     ${(() => {
-      const d = S.config.donations || [];
+      const d = pkg.donations || [];
       if (!d.length) return '<p class="text-sm text-muted">Sin donaciones registradas.</p>';
       return d.map(don => {
-        const from = S.config.people.find(p=>p.id===don.from)?.name||'?';
-        const to   = S.config.people.find(p=>p.id===don.to  )?.name||'?';
+        const from = pkg.people.find(p=>p.id===don.from)?.name||'?';
+        const to   = pkg.people.find(p=>p.id===don.to  )?.name||'?';
         return `<div class="row" style="justify-content:space-between">
           <span class="text-sm">${from} → ${to}</span>
           <button class="btn btn-sm btn-danger revoke-don" data-id="${don.id}">Revocar</button>
@@ -786,12 +884,42 @@ function tplAdmin() {
     })()}
   </div>
 
+  <div class="card gap" style="border-color:#cdd5ff">
+    <p style="font-size:13px;font-weight:500;color:#3730a3">Nuevo paquete</p>
+    <p class="text-xs text-muted">Al iniciar un paquete nuevo, el actual (${pkg.total_sessions} sesiones) se archiva tal cual y deja de recibir sesiones. Las clases de ambos paquetes no se mezclan; el archivado queda disponible desde el selector de paquetes en la cabecera.</p>
+    ${!S.newPkgOpen ? `<button id="adm-new-pkg" class="btn btn-block">+ Iniciar nuevo paquete</button>` : tplNewPkgForm(pkg)}
+  </div>
+
   <div class="card gap" style="border-color:#ffd0d0">
     <p style="font-size:13px;font-weight:500;color:var(--danger)">Zona peligrosa</p>
-    <button id="adm-reset" class="btn btn-danger btn-block">Eliminar todas las sesiones</button>
+    <button id="adm-reset" class="btn btn-danger btn-block">Eliminar todas las sesiones de este paquete</button>
   </div>
   <div style="height:16px"></div>
 </div>`;
+}
+
+function tplNewPkgForm(pkg) {
+  return `
+  <div id="np-form" class="gap" style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
+    <label class="gap" style="gap:4px"><span class="text-xs text-muted">Sesiones totales</span><input id="np-total" class="input" type="number" value="180" min="1"></label>
+    <label class="gap" style="gap:4px"><span class="text-xs text-muted">Período (meses)</span><input id="np-months" class="input" type="number" value="12" min="1"></label>
+    <label class="gap" style="gap:4px"><span class="text-xs text-muted">Fecha de inicio</span><input id="np-start" class="input" type="date" value="${hoy()}"></label>
+    <p class="text-xs text-muted" style="margin-top:4px">Participantes (puedes ajustar nombres y cuotas)</p>
+    <div id="np-people" class="gap">
+      ${pkg.people.map((p,i) => `
+        <div class="row">
+          <div style="width:12px;height:12px;border-radius:50%;background:${PC[i%10]};flex-shrink:0"></div>
+          <input class="input np-pname" type="text" value="${p.name}" style="flex:2">
+          <input class="input np-pquota" type="number" min="0" placeholder="cuota" style="flex:1;min-width:70px">
+        </div>
+      `).join('')}
+    </div>
+    <button id="np-add-p" class="btn btn-block" style="border-style:dashed">+ Agregar participante</button>
+    <div class="row" style="gap:8px;margin-top:4px">
+      <button id="np-create" class="btn btn-primary" style="flex:1">Crear paquete</button>
+      <button id="np-cancel" class="btn" style="flex:1">Cancelar</button>
+    </div>
+  </div>`;
 }
 
 
@@ -820,10 +948,9 @@ function bindSetup() {
     const names  = [...document.querySelectorAll('.fs-p')].map(el => el.value.trim()).filter(Boolean);
     if (!total||!months||!start) { alert('Completa todos los campos del paquete.'); return; }
     if (!names.length) { alert('Agrega al menos un participante.'); return; }
-    await saveConfig({
+    await createFirstPackage({
       total_sessions: total, period_months: months, start_date: start,
-      people: names.map((name,i) => ({ id: i+1, name })),
-      donations: []
+      people: names.map((name,i) => ({ id: i+1, name }))
     });
   });
 }
@@ -841,7 +968,7 @@ function bindPersonSelect() {
     const pass = prompt('Contraseña de administrador:');
     if (pass === ADMIN_PASS) {
       S.isAdmin = true;
-      S.personId = S.config.people[0]?.id || null;
+      S.personId = activePkg().people[0]?.id || null;
       if (S.personId) localStorage.setItem('gym_pid', S.personId);
       render();
     } else if (pass !== null) {
@@ -853,11 +980,15 @@ function bindPersonSelect() {
 function bindApp() {
   // Header
   document.getElementById('btn-change-person')?.addEventListener('click', () => {
-    S.personId = null; S.sheet = null; S.pending = null;
+    S.personId = null; S.sheet = null; S.pending = null; S.viewPkgId = null;
     localStorage.removeItem('gym_pid'); render();
   });
   document.getElementById('exit-admin')?.addEventListener('click', e => {
     e.preventDefault(); S.isAdmin = false; S.tab = 'calendar'; render();
+  });
+  document.getElementById('pkg-switcher')?.addEventListener('change', e => switchView(+e.target.value));
+  document.getElementById('back-to-active')?.addEventListener('click', e => {
+    e.preventDefault(); switchView(activePkg().id);
   });
 
   // Tabs
@@ -946,19 +1077,21 @@ function bindApp() {
     const months = +document.getElementById('adm-months').value || 0;
     const start  = document.getElementById('adm-start').value;
     if (!total||!months||!start) { alert('Completa todos los campos.'); return; }
-    const ok = await saveConfig({ ...S.config, total_sessions: total, period_months: months, start_date: start });
+    const ok = await saveConfig({ total_sessions: total, period_months: months, start_date: start });
     if (ok) alert('Configuración guardada.');
   });
 
   document.getElementById('adm-add-p')?.addEventListener('click', () => {
-    if (S.config.people.length >= 10) return;
+    if (activePkg().people.length >= 10) return;
     const list = document.getElementById('adm-people');
     const idx  = list.children.length;
     const div  = document.createElement('div');
     div.className = 'row';
+    const newPid = `new_${Date.now()}`;
     div.innerHTML = `
       <div style="width:12px;height:12px;border-radius:50%;background:${PC[idx%10]};flex-shrink:0"></div>
-      <input class="input adm-pname" data-pid="new_${Date.now()}" type="text" placeholder="Nombre" style="flex:1">
+      <input class="input adm-pname" data-pid="${newPid}" type="text" placeholder="Nombre" style="flex:2">
+      <input class="input adm-pquota" data-pid="${newPid}" type="number" min="0" placeholder="cuota" style="flex:1;min-width:70px">
       <button class="btn btn-sm btn-danger adm-rm-new" style="flex-shrink:0">×</button>`;
     list.appendChild(div);
     div.querySelector('input').focus();
@@ -968,15 +1101,16 @@ function bindApp() {
   document.querySelectorAll('.adm-rm-p').forEach(btn => {
     btn.addEventListener('click', async () => {
       const pid = +btn.dataset.pid;
-      const p   = S.config.people.find(p => p.id === pid);
-      const n   = S.sessions.filter(s => s.person_id === pid).length;
+      const pkg = activePkg();
+      const p   = pkg.people.find(p => p.id === pid);
+      const n   = sessionsOf(pkg.id).filter(s => s.person_id === pid).length;
       if (!confirm(`¿Eliminar a "${p?.name}"?${n?` También se borrarán sus ${n} sesiones.`:''}`)) return;
-      for (const s of S.sessions.filter(s => s.person_id === pid)) {
+      for (const s of sessionsOf(pkg.id).filter(s => s.person_id === pid)) {
         await sb.from('gym_sessions').delete().eq('id', s.id);
       }
-      const people = S.config.people.filter(p => p.id !== pid);
-      await saveConfig({ ...S.config, people });
-      S.sessions = S.sessions.filter(s => s.person_id !== pid);
+      const people = pkg.people.filter(p => p.id !== pid);
+      await saveConfig({ people });
+      S.sessionsCache[pkg.id] = sessionsOf(pkg.id).filter(s => s.person_id !== pid);
       if (S.personId === pid) {
         S.personId = people[0]?.id || null;
         localStorage.setItem('gym_pid', S.personId || '');
@@ -987,16 +1121,19 @@ function bindApp() {
 
   document.getElementById('adm-save-people')?.addEventListener('click', async () => {
     const inputs = document.querySelectorAll('.adm-pname');
-    let maxId = Math.max(0, ...S.config.people.map(p => p.id));
+    let maxId = Math.max(0, ...activePkg().people.map(p => p.id));
     const people = [];
     inputs.forEach(inp => {
       const name = inp.value.trim();
       if (!name) return;
       const pid  = inp.dataset.pid;
-      people.push({ id: pid.startsWith('new_') ? ++maxId : +pid, name });
+      const id   = pid.startsWith('new_') ? ++maxId : +pid;
+      const quotaInp = document.querySelector(`.adm-pquota[data-pid="${pid}"]`);
+      const quota = quotaInp?.value !== '' ? +quotaInp.value : null;
+      people.push(quota != null ? { id, name, quota } : { id, name });
     });
     if (!people.length) { alert('Debe haber al menos un participante.'); return; }
-    const ok = await saveConfig({ ...S.config, people });
+    const ok = await saveConfig({ people });
     if (ok) alert('Participantes guardados.');
   });
 
@@ -1007,8 +1144,8 @@ function bindApp() {
   document.querySelectorAll('.do-donate').forEach(btn => {
     btn.addEventListener('click', async () => {
       const from = +btn.dataset.from, to = +btn.dataset.to;
-      const fromName = S.config.people.find(p=>p.id===from)?.name;
-      const toName   = S.config.people.find(p=>p.id===to  )?.name;
+      const fromName = activePkg().people.find(p=>p.id===from)?.name;
+      const toName   = activePkg().people.find(p=>p.id===to  )?.name;
       if (!confirm(`¿Donar una sesión de ${fromName} a ${toName}?`)) return;
       await donateSess(from, to);
     });
@@ -1025,17 +1162,57 @@ function bindApp() {
 
   document.getElementById('adm-csv')?.addEventListener('click',  exportCSV);
   document.getElementById('adm-xlsx')?.addEventListener('click', exportXLSX);
+  document.getElementById('adm-backup-xlsx')?.addEventListener('click', exportFullBackupXLSX);
+  document.getElementById('adm-backup-json')?.addEventListener('click', exportFullBackupJSON);
 
   document.getElementById('adm-reset')?.addEventListener('click', async () => {
-    if (!confirm('¿Eliminar TODAS las sesiones? No se puede deshacer.')) return;
+    if (!confirm('Recomendado: descarga un respaldo completo antes de continuar (botones arriba). ¿Eliminar TODAS las sesiones de este paquete? No se puede deshacer.')) return;
     if (!confirm('¿Estás completamente seguro?')) return;
-    const ids = S.sessions.map(s => s.id);
+    const pkg = activePkg();
+    const ids = sessionsOf(pkg.id).map(s => s.id);
     if (ids.length) {
       const { error } = await sb.from('gym_sessions').delete().in('id', ids);
       if (error) { alert('Error: ' + error.message); return; }
     }
-    S.sessions = []; S.sheet = null; render();
-    alert('Todas las sesiones han sido eliminadas.');
+    S.sessionsCache[pkg.id] = []; S.sheet = null; render();
+    alert('Todas las sesiones de este paquete han sido eliminadas.');
+  });
+
+  // ── Nuevo paquete ──────────────────────────────────────
+  document.getElementById('adm-new-pkg')?.addEventListener('click', () => {
+    S.newPkgOpen = true; render();
+  });
+  document.getElementById('np-cancel')?.addEventListener('click', () => {
+    S.newPkgOpen = false; render();
+  });
+  document.getElementById('np-add-p')?.addEventListener('click', () => {
+    const list = document.getElementById('np-people');
+    if (list.children.length >= 10) return;
+    const idx = list.children.length;
+    const div = document.createElement('div');
+    div.className = 'row';
+    div.innerHTML = `
+      <div style="width:12px;height:12px;border-radius:50%;background:${PC[idx%10]};flex-shrink:0"></div>
+      <input class="input np-pname" type="text" placeholder="Nombre" style="flex:2">
+      <input class="input np-pquota" type="number" min="0" placeholder="cuota" style="flex:1;min-width:70px">`;
+    list.appendChild(div);
+    div.querySelector('input').focus();
+  });
+  document.getElementById('np-create')?.addEventListener('click', async () => {
+    const total  = +document.getElementById('np-total').value  || 0;
+    const months = +document.getElementById('np-months').value || 0;
+    const start  = document.getElementById('np-start').value;
+    if (!total||!months||!start) { alert('Completa todos los campos del paquete.'); return; }
+    const rows = [...document.querySelectorAll('#np-people .row')];
+    const people = rows.map((row,i) => {
+      const name = row.querySelector('.np-pname').value.trim();
+      if (!name) return null;
+      const qv = row.querySelector('.np-pquota').value;
+      return qv !== '' ? { id: i+1, name, quota: +qv } : { id: i+1, name };
+    }).filter(Boolean);
+    if (!people.length) { alert('Agrega al menos un participante.'); return; }
+    if (!confirm(`Esto archivará el paquete actual (${activePkg().total_sessions} sesiones) y creará uno nuevo de ${total} sesiones. ¿Continuar?`)) return;
+    await startNewPackage({ total_sessions: total, period_months: months, start_date: start, people });
   });
 }
 
@@ -1045,37 +1222,86 @@ function bindApp() {
 // ══════════════════════════════════════════════════════
 
 function exportCSV() {
+  const pkg = activePkg();
   const t = hoy();
   const rows = [['Persona','Fecha','Hora','Estado'],
-    ...[...S.sessions]
+    ...[...sessionsOf(pkg.id)]
       .sort((a,b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time))
       .map(s => [
-        S.config.people.find(p => p.id===s.person_id)?.name || '?',
+        pkg.people.find(p => p.id===s.person_id)?.name || '?',
         s.date, s.time, s.date<=t ? 'Usado' : 'Programado'
       ])
   ];
   const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
   const a = Object.assign(document.createElement('a'), {
     href: URL.createObjectURL(new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8'})),
-    download: 'sesiones_gym.csv'
+    download: `sesiones_gym_${pkg.start_date}.csv`
   });
   a.click();
 }
 
 function exportXLSX() {
   if (!window.XLSX) { alert('La librería aún no cargó.'); return; }
-  if (!S.sessions.length) { alert('No hay sesiones para exportar.'); return; }
+  const pkg = activePkg();
+  if (!sessionsOf(pkg.id).length) { alert('No hay sesiones para exportar.'); return; }
   const t = hoy();
-  const data = [...S.sessions]
+  const data = [...sessionsOf(pkg.id)]
     .sort((a,b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time))
     .map(s => ({
-      Persona: S.config.people.find(p => p.id===s.person_id)?.name || '?',
+      Persona: pkg.people.find(p => p.id===s.person_id)?.name || '?',
       Fecha: s.date, Hora: s.time,
       Estado: s.date<=t ? 'Usado' : 'Programado'
     }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Sesiones');
-  XLSX.writeFile(wb, 'sesiones_gym.xlsx');
+  XLSX.writeFile(wb, `sesiones_gym_${pkg.start_date}.xlsx`);
+}
+
+// ── Respaldo completo (todos los paquetes) ─────────────
+async function fetchAllSessions() {
+  const { data, error } = await sb.from('gym_sessions').select('*');
+  if (error) { alert('Error al leer sesiones: ' + error.message); return null; }
+  return data || [];
+}
+
+async function exportFullBackupXLSX() {
+  if (!window.XLSX) { alert('La librería aún no cargó.'); return; }
+  const allSessions = await fetchAllSessions();
+  if (allSessions === null) return;
+  const pkgById = Object.fromEntries(S.packages.map(p => [p.id, p]));
+  const t = hoy();
+
+  const pkgRows = S.packages.map(p => ({
+    Inicio: p.start_date, Sesiones_totales: p.total_sessions, Periodo_meses: p.period_months,
+    Activo: p.active ? 'Sí' : 'No', Participantes: p.people.map(x => x.name).join(', ')
+  }));
+  const sessRows = [...allSessions]
+    .sort((a,b) => (a.package_id-b.package_id) || a.date.localeCompare(b.date) || a.time.localeCompare(b.time))
+    .map(s => {
+      const pkg = pkgById[s.package_id];
+      return {
+        Paquete: pkg ? `${pkg.start_date} (${pkg.total_sessions} sesiones)` : `id ${s.package_id}`,
+        Persona: pkg?.people.find(p => p.id===s.person_id)?.name || '?',
+        Fecha: s.date, Hora: s.time,
+        Estado: s.date<=t ? 'Usado' : 'Programado'
+      };
+    });
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pkgRows), 'Paquetes');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sessRows), 'Todas las sesiones');
+  XLSX.writeFile(wb, `respaldo_gym_${hoy()}.xlsx`);
+}
+
+async function exportFullBackupJSON() {
+  const allSessions = await fetchAllSessions();
+  if (allSessions === null) return;
+  const payload = { exportado: new Date().toISOString(), packages: S.packages, sessions: allSessions };
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })),
+    download: `respaldo_gym_${hoy()}.json`
+  });
+  a.click();
 }
 
 
